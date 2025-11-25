@@ -102,7 +102,8 @@ async def root():
 @app.post("/api/livekit/token")
 async def get_livekit_token(request: TokenRequest):
     """
-    Generate LiveKit access token for a participant to join a room
+    Generate LiveKit access token for a participant to join a room.
+    Also triggers agent dispatch for the room.
     """
     try:
         # Create access token
@@ -119,39 +120,27 @@ async def get_livekit_token(request: TokenRequest):
             room=request.room_name,
             can_publish=True,
             can_subscribe=True,
+            can_publish_data=True,
         ))
-
-        # Configure agent dispatch for this room
-        token.with_room_config(
-            api.RoomConfiguration(
-                agents=[
-                    api.RoomAgentDispatch(
-                        agent_name="meeting-transcriber"
-                    )
-                ]
-            )
-        )
 
         # Generate JWT
         jwt_token = token.to_jwt()
 
-        # Explicitly dispatch agent to room
+        # Explicitly dispatch agent to room after token generation
         try:
-            dispatch_service = AgentDispatchService(
-                url=config.LIVEKIT_URL,
-                api_key=config.LIVEKIT_API_KEY,
-                api_secret=config.LIVEKIT_API_SECRET
+            dispatch_client = api.AgentDispatchServiceClient(
+                config.LIVEKIT_URL,
+                config.LIVEKIT_API_KEY,
+                config.LIVEKIT_API_SECRET
             )
-            await dispatch_service.create_dispatch(
-                CreateAgentDispatchRequest(
-                    room=request.room_name,
-                    agent_name="meeting-transcriber"
-                )
+            await dispatch_client.create_dispatch(
+                room=request.room_name,
+                agent_name="",  # Empty = any available agent
+                metadata="transcription-agent"
             )
-            logger.info(f"Dispatched agent 'meeting-transcriber' to room '{request.room_name}'")
+            logger.info(f"✅ Agent dispatch triggered for room: {request.room_name}")
         except Exception as dispatch_error:
-            logger.warning(f"Agent dispatch failed (may already be dispatched): {dispatch_error}")
-            # Continue even if dispatch fails - token generation is more important
+            logger.warning(f"⚠️  Agent dispatch failed (agent may already be connected): {dispatch_error}")
 
         return {
             "token": jwt_token,

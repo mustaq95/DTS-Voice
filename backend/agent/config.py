@@ -9,7 +9,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Transcription settings
-WHISPER_MODEL = "mlx-community/whisper-tiny"  # HuggingFace model path
+WHISPER_MODEL = "mlx-community/whisper-small-mlx"  # HuggingFace model path
 VAD_THRESHOLD = 0.5
 
 # Storage settings
