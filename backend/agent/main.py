@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from livekit import rtc
@@ -8,6 +9,7 @@ from livekit.plugins import silero
 import numpy as np
 import os
 import sys
+from scipy import signal as scipy_signal
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,7 +41,7 @@ async def process_speech_segment(
     participant_identity: str,
     audio_buffer: list,
     meeting_id: str,
-    ws_broadcast_fn
+    room: rtc.Room
 ):
     """
     Process a complete speech segment after VAD detects speech end
@@ -48,7 +50,7 @@ async def process_speech_segment(
         participant_identity: Identity of the speaking participant
         audio_buffer: List of audio frames
         meeting_id: Current meeting session ID
-        ws_broadcast_fn: Function to broadcast transcript to WebSocket clients
+        room: LiveKit Room instance for publishing transcripts via data channel
     """
     if not audio_buffer:
         return
@@ -58,19 +60,39 @@ async def process_speech_segment(
     try:
         # Convert audio buffer to numpy array
         # AudioStream yields AudioFrameEvent objects, which contain a .frame attribute
-        audio_data = np.concatenate([
+        # LiveKit audio is typically 48kHz, we need to resample to 16kHz for Whisper
+        audio_data_48k = np.concatenate([
             np.frombuffer(frame.frame.data, dtype=np.int16).astype(np.float32) / 32768.0
             for frame in audio_buffer
         ])
 
+        # Get the actual sample rate from the first frame
+        if audio_buffer:
+            source_sample_rate = audio_buffer[0].frame.sample_rate
+        else:
+            source_sample_rate = 48000  # default assumption
+
+        logger.info(f"Audio data: {len(audio_data_48k)} samples at {source_sample_rate}Hz ({len(audio_data_48k)/source_sample_rate:.2f} seconds)")
+
+        # Resample from source rate to 16kHz for Whisper
+        target_sample_rate = 16000
+        if source_sample_rate != target_sample_rate:
+            num_samples = int(len(audio_data_48k) * target_sample_rate / source_sample_rate)
+            audio_data = scipy_signal.resample(audio_data_48k, num_samples)
+            logger.debug(f"Resampled audio from {source_sample_rate}Hz to {target_sample_rate}Hz: {len(audio_data)} samples")
+        else:
+            audio_data = audio_data_48k
+
         # Transcribe with MLX Whisper
-        result = transcribe_audio(audio_data, sample_rate=16000, is_final=True)
+        result = transcribe_audio(audio_data, sample_rate=target_sample_rate, is_final=True)
         text = result.get("text", "").strip()
 
         if not text:
+            logger.debug(f"Empty transcription result from Whisper for {participant_identity}")
             return
 
         timestamp = format_timestamp()
+        logger.info(f"[{timestamp}] {participant_identity}: {text}")
 
         # Create transcript entry
         transcript = {
@@ -94,12 +116,21 @@ async def process_speech_segment(
             )
             storage.save_meeting_session(session, config.DATA_DIR)
 
-        # Broadcast to WebSocket clients
-        if ws_broadcast_fn:
-            await ws_broadcast_fn({
+        # Publish transcript to LiveKit room via data channel
+        try:
+            message = {
                 "type": "transcript",
                 "data": transcript
-            })
+            }
+            payload = json.dumps(message).encode('utf-8')
+            await room.local_participant.publish_data(
+                payload=payload,
+                reliable=True,
+                topic="transcription"
+            )
+            logger.info(f"Published transcript to room via data channel")
+        except Exception as pub_error:
+            logger.error(f"Error publishing transcript to room: {pub_error}")
 
     except Exception as e:
         logger.error(f"Error processing speech segment: {e}")
@@ -109,7 +140,7 @@ async def handle_participant_audio(
     participant: rtc.RemoteParticipant,
     meeting_id: str,
     vad: silero.VAD,
-    ws_broadcast_fn
+    room: rtc.Room
 ):
     """
     Handle audio from a single participant
@@ -118,7 +149,7 @@ async def handle_participant_audio(
         participant: RemoteParticipant instance
         meeting_id: Meeting session ID
         vad: Silero VAD instance
-        ws_broadcast_fn: WebSocket broadcast function
+        room: LiveKit Room instance
     """
     logger.info(f"Handling audio for participant: {participant.identity}")
 
@@ -132,7 +163,7 @@ async def handle_participant_audio(
                 participant.identity,
                 audio_buffer.copy(),
                 meeting_id,
-                ws_broadcast_fn
+                room
             )
             audio_buffer = []
 
@@ -186,16 +217,10 @@ async def entrypoint(ctx: JobContext):
     # Load VAD
     vad = silero.VAD.load()
 
-    # WebSocket broadcast function (to be connected with FastAPI server)
-    # For now, this is a placeholder
-    async def ws_broadcast(message):
-        # This will be replaced with actual WebSocket broadcast
-        logger.info(f"Broadcasting: {message}")
-
     # Handle existing participants
     for participant in room.remote_participants.values():
         asyncio.create_task(
-            handle_participant_audio(participant, meeting_id, vad, ws_broadcast)
+            handle_participant_audio(participant, meeting_id, vad, room)
         )
 
     # Handle new participants joining
@@ -203,7 +228,7 @@ async def entrypoint(ctx: JobContext):
     def on_participant_connected(participant: rtc.RemoteParticipant):
         logger.info(f"Participant connected: {participant.identity}")
         asyncio.create_task(
-            handle_participant_audio(participant, meeting_id, vad, ws_broadcast)
+            handle_participant_audio(participant, meeting_id, vad, room)
         )
 
     @room.on("participant_disconnected")
@@ -221,7 +246,7 @@ async def entrypoint(ctx: JobContext):
             logger.info(f"New audio track subscribed from {participant.identity}")
             # Re-handle audio for this participant to pick up the new track
             asyncio.create_task(
-                handle_participant_audio(participant, meeting_id, vad, ws_broadcast)
+                handle_participant_audio(participant, meeting_id, vad, room)
             )
 
     # Cleanup callback
@@ -237,4 +262,6 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     # Run the agent server
+    # For manual testing, you can directly connect to a room:
+    # python -m agent.main connect --room voice-fest --url ws://localhost:7880
     cli.run_app(server)
