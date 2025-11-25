@@ -96,3 +96,4 @@ Thumbs.db
 *.bak
 *_backup.py
 production_agent_backup.py
+data/meetings/*.json
