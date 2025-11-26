@@ -8,8 +8,7 @@ from datetime import datetime
 import os
 import sys
 from livekit import api
-from livekit.api.agent_dispatch_service import AgentDispatchService, CreateAgentDispatchRequest
-from livekit.api import RoomAgentDispatch
+import aiohttp
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,21 +125,27 @@ async def get_livekit_token(request: TokenRequest):
         # Generate JWT
         jwt_token = token.to_jwt()
 
-        # Explicitly dispatch agent to room after token generation
+        # Explicitly dispatch agent to room
         try:
-            dispatch_client = api.AgentDispatchServiceClient(
-                config.LIVEKIT_URL,
-                config.LIVEKIT_API_KEY,
-                config.LIVEKIT_API_SECRET
-            )
-            await dispatch_client.create_dispatch(
-                room=request.room_name,
-                agent_name="",  # Empty = any available agent
-                metadata="transcription-agent"
-            )
-            logger.info(f"✅ Agent dispatch triggered for room: {request.room_name}")
+            from livekit.api.agent_dispatch_service import AgentDispatchService, CreateAgentDispatchRequest
+
+            async with aiohttp.ClientSession() as session:
+                dispatch_service = AgentDispatchService(
+                    session,
+                    config.LIVEKIT_URL,
+                    config.LIVEKIT_API_KEY,
+                    config.LIVEKIT_API_SECRET
+                )
+                await dispatch_service.create_dispatch(
+                    CreateAgentDispatchRequest(
+                        room=request.room_name,
+                        agent_name="",  # Empty = any available agent
+                        metadata="transcription-agent"
+                    )
+                )
+            logger.info(f"✅ Agent dispatched to room: {request.room_name}")
         except Exception as dispatch_error:
-            logger.warning(f"⚠️  Agent dispatch failed (agent may already be connected): {dispatch_error}")
+            logger.warning(f"⚠️  Agent dispatch failed (may already be connected): {dispatch_error}")
 
         return {
             "token": jwt_token,

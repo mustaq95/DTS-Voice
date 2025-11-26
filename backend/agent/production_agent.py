@@ -194,17 +194,29 @@ def prewarm(proc: JobProcess):
     """
     Prewarm function - loads VAD and Whisper models before agent starts.
     This reduces latency on first use.
+
+    NOTE: This function is called immediately when the worker starts!
     """
     logger.info("🔥 Prewarming models...")
     proc.userdata["vad"] = silero.VAD.load(
-        min_speech_duration=0.05,      # 50ms - detect speech start quickly
-        min_silence_duration=0.8,      # 800ms - allow natural pauses in sentences
-        prefix_padding_duration=0.3,   # 300ms - capture beginning of speech
+        activation_threshold=0.5,
+        min_speech_duration=0.25,
+        min_silence_duration=0.3,
+        # min_speech_duration=0.3,       # 300ms - require longer audio to avoid noise triggering
+        # min_silence_duration=0.5,      # 500ms - shorter silence to end speech faster
+        prefix_padding_duration=0.2,   # 200ms - capture beginning of speech
         max_buffered_speech=60.0,      # 60s - long utterances OK
-        activation_threshold=0.5,      # Default threshold
+        # activation_threshold=0.7,      # Higher threshold = less sensitive to background noise
         sample_rate=16000              # Match Whisper's expected rate
     )
-    logger.info("✅ VAD model loaded with meeting-optimized settings")
+    logger.info("✅ VAD model loaded with noise-resistant settings")
+
+    # Immediately connect to voice-fest room after prewarming
+    logger.info("🚀 Scheduling immediate connection to voice-fest")
+
+    # Store configuration for entrypoint
+    proc.userdata["auto_connect"] = True
+    proc.userdata["target_room"] = "voice-fest"
 
 
 # Create AgentServer (must be at module level for multiprocessing)
@@ -215,10 +227,10 @@ server.setup_fnc = prewarm
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     """
-    AgentServer entrypoint - bypasses dispatch and explicitly connects to voice-fest.
-    This follows LiveKit patterns but doesn't wait for dispatch.
+    AgentServer entrypoint - properly connects to assigned room via JobContext.
+    This is triggered automatically when a participant joins a room (auto_subscribe=True).
     """
-    logger.info("🚀 AgentServer starting - will connect to voice-fest explicitly")
+    logger.info(f"🚀 Agent entrypoint called for room: {ctx.room.name if hasattr(ctx, 'room') else 'unknown'}")
 
     # Get pre-warmed VAD
     vad = ctx.proc.userdata["vad"]
@@ -227,8 +239,10 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"📥 Loading Whisper model: {config.WHISPER_MODEL}")
     load_whisper_model(config.WHISPER_MODEL)
 
-    # Create and connect to room explicitly (bypass standard dispatch flow)
-    room = rtc.Room()
+    # Connect to the room provided by JobContext
+    await ctx.connect()
+    room = ctx.room
+    logger.info(f"✅ Connected to room: {room.name}")
 
     # Track audio processing tasks
     participant_tasks = {}
@@ -241,6 +255,13 @@ async def entrypoint(ctx: JobContext):
         participant: rtc.RemoteParticipant
     ):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
+            # Check if we already have an active task for this participant
+            if participant.identity in participant_tasks:
+                existing_task = participant_tasks[participant.identity]
+                if not existing_task.done():
+                    logger.info(f"⏭️  Audio track already being processed for {participant.identity}, skipping")
+                    return
+
             logger.info(f"🎵 Audio track subscribed from {participant.identity}")
             task = asyncio.create_task(
                 process_audio_with_vad(track, participant.identity, room, vad)
@@ -258,31 +279,20 @@ async def entrypoint(ctx: JobContext):
             participant_tasks[participant.identity].cancel()
             del participant_tasks[participant.identity]
 
-    # Generate token for agent
-    from livekit import api
-    token = api.AccessToken(
-        api_key=config.LIVEKIT_API_KEY,
-        api_secret=config.LIVEKIT_API_SECRET
-    )
-    token.with_identity("production-agent")
-    token.with_name("Production Transcription Agent")
-    token.with_grants(api.VideoGrants(
-        room_join=True,
-        room="voice-fest",
-        can_subscribe=True,
-        can_publish_data=True,
-    ))
-    jwt_token = token.to_jwt()
+    logger.info("✅ Agent ready - listening for audio tracks!")
 
-    # Connect to room
-    logger.info(f"🔗 Connecting to room: voice-fest")
-    await room.connect(config.LIVEKIT_URL, jwt_token)
-    logger.info("✅ AgentServer connected with proper VAD!")
-
-    # Keep running (agent server keeps process alive)
-    await asyncio.Future()
+    # The agent will keep running as long as the room is active
+    # JobContext manages the lifecycle automatically
 
 
 if __name__ == "__main__":
-    # Run with AgentServer CLI - production ready with explicit dispatch
-    cli.run_app(server)
+    # Run with AgentServer CLI
+    # Note: Agent will join rooms when explicitly dispatched or via room create rules
+    from livekit.agents import WorkerOptions
+
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
+        )
+    )
