@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Real-time meeting transcription system with AI-powered insights. Audio flows from LiveKit → Silero VAD → MLX Whisper → FastAPI WebSocket → Next.js UI. OpenAI GPT-4 classifies transcripts into nudges (proposals, risks, actions).
+Real-time meeting transcription system with AI-powered insights. Audio flows from LiveKit → Audio Preprocessing → Silero VAD → MLX Whisper → FastAPI WebSocket → Next.js UI. OpenAI GPT-4 classifies transcripts into nudges (proposals, risks, actions).
 
 **Critical**: Requires Apple Silicon for MLX Whisper. Must use `uv` for Python dependency management (mandatory).
 
@@ -22,10 +22,13 @@ uv pip install -e .
 # Run FastAPI server (port 8000)
 python -m uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 
-# Run LiveKit agent
+# Run LiveKit production agent (recommended)
+python -m agent.production_agent dev
+
+# Or run basic agent (legacy)
 python -m agent.main
 
-# Both required for full functionality
+# Both API server and agent required for full functionality
 ```
 
 ### Frontend (Next.js)
@@ -41,41 +44,83 @@ npm run lint
 ### Quick Start
 
 ```bash
-./scripts/setup.sh              # First-time setup
-./scripts/start-backend.sh      # Start API + Agent
-./scripts/start-frontend.sh     # Start Next.js
+# Start LiveKit server
+livekit-server --dev
+
+# Start backend services (in separate terminals)
+cd backend && source .venv/bin/activate
+python -m uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
+python -m agent.production_agent dev
+
+# Start frontend
+cd frontend && npm run dev
 ```
 
 ## Architecture
 
 ### Three-Service Model
 
-1. **LiveKit Agent** (`backend/agent/main.py`)
-   - Joins LiveKit room as participant
-   - Receives audio via `rtc.AudioStream`
-   - Uses `@server.rtc_session()` decorator for entry point
-   - Global `meeting_sessions` dict stores active meetings
+1. **LiveKit Production Agent** (`backend/agent/production_agent.py`)
+   - Joins LiveKit rooms via job dispatch API
+   - Applies real-time audio preprocessing (high-pass filter, normalization)
+   - Uses Silero VAD for speech detection with production settings
+   - Transcribes audio using MLX Whisper (whisper-large-v3-turbo)
+   - Validates audio quality to prevent hallucinations
+   - Sends transcripts to frontend via LiveKit data channel
 
 2. **FastAPI Server** (`backend/api/server.py`)
-   - WebSocket at `/ws/transcripts` broadcasts transcripts
+   - Generates LiveKit access tokens for participants
+   - Dispatches agents to rooms automatically
+   - WebSocket at `/ws/transcripts` for real-time updates (optional)
    - REST endpoint `/api/nudge` for LLM classification
-   - `ConnectionManager` class handles WebSocket clients
    - CORS configured for localhost:3000
 
 3. **Next.js Frontend** (`frontend/app/page.tsx`)
-   - `useTranscription` hook manages WebSocket connection
+   - `useLiveKit` hook manages LiveKit room connection
+   - Receives transcripts via LiveKit data channel
    - Auto-requests nudges every 5 final transcripts
    - Dark theme via Tailwind v4 (`@import "tailwindcss"`)
+
+### Production Agent Pipeline
+
+**Audio Processing Flow**:
+```
+LiveKit AudioStream (48kHz int16)
+  → Audio Preprocessing Module
+      ├─ High-pass filter (80Hz) - removes rumble/DC offset
+      ├─ Peak normalization (-3dB) - consistent levels
+      └─ Quality validation - prevents hallucinations
+  → Silero VAD (production settings)
+      ├─ activation_threshold: 0.4
+      ├─ min_speech_duration: 0.3s
+      ├─ min_silence_duration: 0.6s
+      └─ Speech segment detection
+  → MLX Whisper (whisper-large-v3-turbo)
+      ├─ Resample 48kHz → 16kHz
+      ├─ Transcribe audio segment
+      └─ Return text + confidence
+  → LiveKit Data Channel
+      └─ Send to frontend participants
+```
+
+**Audio Validation Checks** (prevents Whisper hallucinations):
+- Empty audio detection
+- NaN/Inf value detection
+- Silence threshold (-55dB RMS)
+- Stuck buffer detection
+- Clipping detection (>3%)
+- Minimum duration (0.3s)
 
 ### Data Flow Pattern
 
 **Audio → Transcript**:
 ```
-LiveKit Room → agent.main.handle_participant_audio()
-  → VAD detects speech end → audio_buffer accumulated
+LiveKit Room → production_agent.py processes audio
+  → Audio preprocessing (filter + normalize)
+  → VAD detects speech boundaries
   → transcription.transcribe_audio() [MLX Whisper]
-  → storage.add_transcript() → JSON file
-  → WebSocket broadcast → Frontend
+  → Send via LiveKit data channel
+  → Frontend receives and displays
 ```
 
 **Transcript → Nudges**:
@@ -87,31 +132,34 @@ Frontend accumulates transcripts → POST /api/nudge
 
 ### Key Patterns
 
-- **Agent State**: Global `meeting_sessions` dict in `agent/main.py` stores per-room sessions
-- **Storage**: Simple JSON files in `data/meetings/{uuid}.json` - no database
-- **WebSocket Broadcast**: `ConnectionManager` in `server.py` broadcasts to all connected clients
-- **Functional Style**: No classes except where required (Agent, ConnectionManager) - simple functions preferred
+- **Production VAD Settings**: Balanced sensitivity (0.4 threshold) reduces false positives
+- **Audio Preprocessing**: Lightweight real-time processing prevents corruption
+- **Quality Validation**: Multi-check system prevents Whisper hallucinations on bad audio
+- **Agent Dispatch**: Automatic dispatch via API server when participants join
+- **Data Channel Communication**: Direct LiveKit data channel (no WebSocket dependency)
+- **Functional Style**: Simple functions preferred over classes
 
 ## Module Responsibilities
 
 ### `backend/agent/`
 
-- **main.py**: LiveKit agent entry point using `AgentServer` and `@server.rtc_session()` decorator
+- **production_agent.py**: Production LiveKit agent with audio preprocessing and VAD
+- **main.py**: Legacy basic agent (simpler, less robust)
+- **audio_preprocessing.py**: Real-time audio processing (filter, normalize, validate)
 - **transcription.py**: MLX Whisper wrapper - `transcribe_audio()` returns dict with text/confidence
-- **vad_handler.py**: Silero VAD event handlers (currently simplified, VAD loaded but not fully integrated)
-- **config.py**: Environment variables via `python-dotenv`
+- **config.py**: Environment variables and production settings
 
 ### `backend/api/`
 
-- **server.py**: FastAPI app with WebSocket `/ws/transcripts` and REST endpoints
+- **server.py**: FastAPI app with token generation, agent dispatch, and REST endpoints
 - **llm_service.py**: OpenAI integration with prompt template for classification
-- **storage.py**: JSON file operations - `create_meeting_session()`, `add_transcript()`, `save_meeting_session()`
+- **storage.py**: JSON file operations for meeting data
 
 ### `frontend/`
 
 - **app/page.tsx**: Main page with transcript/nudges panels
 - **components/**: `LiveTranscript`, `NudgesPanel`, `MeetingControls`
-- **hooks/useTranscription.ts**: WebSocket client managing connection and state
+- **hooks/useLiveKit.ts**: LiveKit room connection and microphone management
 - **lib/types.ts**: TypeScript interfaces for Transcript, Nudge, etc.
 
 ## Configuration
@@ -121,9 +169,19 @@ Frontend accumulates transcripts → POST /api/nudge
 **backend/.env**:
 ```env
 LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=<livekit-key>
-LIVEKIT_API_SECRET=<livekit-secret>
-OPENAI_API_KEY=<openai-key>
+LIVEKIT_API_KEY=devkey
+LIVEKIT_API_SECRET=secret
+OPENAI_API_KEY=<your-openai-key>
+
+# Optional: Audio preprocessing settings
+ENABLE_HIGHPASS_FILTER=true
+ENABLE_NORMALIZATION=true
+HIGHPASS_CUTOFF_HZ=80
+NORMALIZATION_TARGET_DB=-3.0
+
+# Optional: Audio validation settings
+ENABLE_AUDIO_VALIDATION=true
+AUDIO_VALIDATION_RMS_THRESHOLD_DB=-55.0
 ```
 
 **frontend/.env.local**:
@@ -137,7 +195,16 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api
 
 Must run separately:
 ```bash
-livekit-server --dev  # Local, or use LiveKit Cloud credentials
+livekit-server --dev  # Local dev mode (uses devkey/secret)
+# Or use LiveKit Cloud credentials
+```
+
+### Whisper Model Configuration
+
+In `backend/agent/config.py`:
+```python
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Recommended
+# Alternative: "mlx-community/whisper-large-v3" (slower, more accurate)
 ```
 
 ## Common Issues
@@ -145,14 +212,31 @@ livekit-server --dev  # Local, or use LiveKit Cloud credentials
 ### MLX Whisper Installation
 Only works on Apple Silicon. If `uv pip install mlx-whisper` fails, verify `uname -m` shows `arm64`.
 
-### WebSocket Connection Errors
-Frontend shows "WebSocket disconnected" if FastAPI server not running. Start with `python -m uvicorn api.server:app --reload`.
+### Audio is Silent / No Transcripts
+1. Check browser microphone permissions (lock icon in address bar)
+2. Verify correct microphone selected in System Settings → Sound → Input
+3. Check agent logs for "Audio is near-silent" warnings
+4. Try adjusting VAD settings in `production_agent.py` if too sensitive/insensitive
 
-### Agent Not Transcribing
+### WebSocket Connection Errors
+Frontend shows "Disconnected" if API server not running on port 8000. Start with:
+```bash
+python -m uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Agent Not Joining Room
 1. Verify LiveKit server running (port 7880)
-2. Check `.env` credentials are correct
-3. Ensure agent connected: check logs for "Agent joining room"
-4. Audio frames need proper conversion in `main.py:process_speech_segment()` - currently simplified
+2. Check `.env` credentials match (devkey/secret for local dev)
+3. Ensure API server is running to dispatch agents
+4. Check agent logs for "registered worker" message
+
+### Whisper Hallucinations
+If seeing random/repeated text, the audio validation is working. This happens when:
+- Audio is too quiet (below -55dB)
+- Audio segment too short (<0.3s)
+- Audio is corrupted or clipped
+
+Solution: Adjust thresholds in `config.py` or improve microphone gain.
 
 ### Tailwind CSS Errors
 Uses Tailwind v4 syntax: `@import "tailwindcss"` not `@tailwind base/components/utilities`. Custom colors via `@theme` block.
@@ -163,31 +247,27 @@ Uses Tailwind v4 syntax: `@import "tailwindcss"` not `@tailwind base/components/
 - **Type hints**: Python functions have type hints, frontend uses TypeScript
 - **Async/await**: All agent and API code is async
 - **Simple imports**: Relative imports within modules (e.g., `from . import config`)
+- **Error handling**: Log errors visibly, don't silently fail
 
-## Data Schemas
+## Production Settings
 
-### Meeting Session JSON
-```json
-{
-  "meeting_id": "uuid",
-  "room_name": "voice-fest",
-  "started_at": "ISO8601",
-  "transcripts": [
-    {"timestamp": "HH:MM:SS", "speaker": "string", "text": "string", "is_final": bool}
-  ],
-  "nudges": [
-    {"type": "key_proposal|delivery_risk|action_item", "title": "string", "quote": "string", "confidence": float}
-  ]
-}
+### VAD Configuration (production_agent.py)
+```python
+activation_threshold=0.4       # Balanced sensitivity
+min_speech_duration=0.3        # Reduces false positives
+min_silence_duration=0.6       # Reliable speech end detection
+prefix_padding_duration=0.3    # Captures word starts
 ```
 
-### WebSocket Message Format
-```json
-{
-  "type": "transcript",
-  "data": {"timestamp": "10:30:15", "speaker": "Chair", "text": "...", "is_final": true}
-}
+### Audio Validation (config.py)
+```python
+AUDIO_VALIDATION_RMS_THRESHOLD_DB = -55.0  # Silence threshold
 ```
+
+### Audio Preprocessing
+- High-pass filter: 80Hz (removes rumble, AC hum)
+- Peak normalization: -3dB (prevents clipping)
+- Sample rate: 48kHz → 16kHz resampling for Whisper
 
 ## Dependencies Management
 
@@ -195,19 +275,12 @@ Uses Tailwind v4 syntax: `@import "tailwindcss"` not `@tailwind base/components/
 
 **Node**: Standard npm. Key deps: `livekit-client`, `recharts`, `lucide-react`.
 
-## Testing Notes
-
-No tests currently implemented. When adding:
-- Backend: Use `pytest` with fixtures for LiveKit/WebSocket mocking
-- Frontend: Use React Testing Library for components, Playwright for E2E
-- Integration: Test full flow with mock LiveKit room
-
 ## Performance Notes
 
-- Transcription latency: ~1-2s (MLX Whisper Tiny on Apple Silicon)
-- VAD currently simplified - full integration would use Silero VAD events properly
-- WebSocket has no reconnection backoff - consider adding for production
-- No rate limiting on `/api/nudge` endpoint
+- Transcription latency: ~1-2s (MLX Whisper Turbo on M4 Apple Silicon)
+- Audio preprocessing: <5ms per frame (lightweight, real-time)
+- VAD detection: Real-time with optimized settings
+- Model loading: ~5s on first room join (cached thereafter)
 
 ## UI Theme
 

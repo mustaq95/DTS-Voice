@@ -34,12 +34,14 @@ def transcribe_audio(audio_data: np.ndarray, sample_rate: int = 16000, is_final:
         # Ensure model is loaded
         model = load_whisper_model()
 
-        # Run transcription
+        # Run transcription with anti-hallucination parameters
         result = mlx_whisper.transcribe(
             audio_data,
             path_or_hf_repo=model,
-            language="en",
-            fp16=False  # MLX handles precision automatically
+            language=None,                      # Auto-detect language (important!)
+            task="transcribe",                  # Keep original language (not translate)
+            fp16=True,                          # Use FP16 for speed on Apple Silicon
+            condition_on_previous_text=False,   # Prevents hallucination loops
         )
 
         text = result.get("text", "").strip()

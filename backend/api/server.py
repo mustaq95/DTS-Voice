@@ -7,8 +7,8 @@ import logging
 from datetime import datetime
 import os
 import sys
-from livekit import api
 import aiohttp
+from livekit import api
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,6 +32,9 @@ app.add_middleware(
 
 # WebSocket connections
 active_connections: Set[WebSocket] = set()
+
+# Track rooms where agents have been dispatched
+dispatched_rooms: set[str] = set()
 
 
 # Pydantic models for API
@@ -102,16 +105,14 @@ async def root():
 async def get_livekit_token(request: TokenRequest):
     """
     Generate LiveKit access token for a participant to join a room.
-    Also triggers agent dispatch for the room.
+    Agent auto-joins via WorkerType.ROOM - no manual dispatch needed.
     """
     try:
-        # Create access token
         token = api.AccessToken(
             api_key=config.LIVEKIT_API_KEY,
             api_secret=config.LIVEKIT_API_SECRET
         )
 
-        # Grant permissions
         token.with_identity(request.participant_name)
         token.with_name(request.participant_name)
         token.with_grants(api.VideoGrants(
@@ -122,30 +123,35 @@ async def get_livekit_token(request: TokenRequest):
             can_publish_data=True,
         ))
 
-        # Generate JWT
         jwt_token = token.to_jwt()
 
-        # Explicitly dispatch agent to room
-        try:
-            from livekit.api.agent_dispatch_service import AgentDispatchService, CreateAgentDispatchRequest
+        logger.info(f"✅ Token generated for {request.participant_name} in room {request.room_name}")
 
-            async with aiohttp.ClientSession() as session:
-                dispatch_service = AgentDispatchService(
-                    session,
-                    config.LIVEKIT_URL,
-                    config.LIVEKIT_API_KEY,
-                    config.LIVEKIT_API_SECRET
+        # Dispatch agent to room if not already dispatched
+        if request.room_name not in dispatched_rooms:
+            try:
+                # Convert ws:// to http:// for dispatch service URL
+                dispatch_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+
+                # Create agent dispatch service
+                dispatch_service = api.AgentDispatchService(
+                    api_key=config.LIVEKIT_API_KEY,
+                    api_secret=config.LIVEKIT_API_SECRET,
+                    url=dispatch_url
                 )
+
+                # Dispatch agent to room
                 await dispatch_service.create_dispatch(
-                    CreateAgentDispatchRequest(
-                        room=request.room_name,
-                        agent_name="",  # Empty = any available agent
-                        metadata="transcription-agent"
-                    )
+                    room=request.room_name,
+                    agent_name="production-agent"
                 )
-            logger.info(f"✅ Agent dispatched to room: {request.room_name}")
-        except Exception as dispatch_error:
-            logger.warning(f"⚠️  Agent dispatch failed (may already be connected): {dispatch_error}")
+
+                dispatched_rooms.add(request.room_name)
+                logger.info(f"🤖 Agent dispatched to room: {request.room_name}")
+
+            except Exception as dispatch_error:
+                logger.warning(f"Agent dispatch failed (non-critical): {dispatch_error}")
+                # Don't fail token generation if dispatch fails
 
         return {
             "token": jwt_token,

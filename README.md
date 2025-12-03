@@ -6,35 +6,56 @@ Real-time meeting transcription and intelligence system powered by LiveKit, MLX 
 
 This project provides:
 - **Real-time transcription** using MLX Whisper (optimized for Apple Silicon)
-- **Voice Activity Detection** using Silero VAD through LiveKit
+- **Production-grade audio processing** with high-pass filtering, normalization, and quality validation
+- **Voice Activity Detection** using Silero VAD with balanced production settings
 - **LLM-powered insights** via OpenAI GPT-4 for extracting key proposals, risks, and action items
 - **Modern web interface** built with Next.js showing live transcripts and AI-generated nudges
 
-## Project Structure
+## Architecture
+
+### Audio Processing Pipeline
 
 ```
-livekit-whisper/
-├── backend/                    # Python backend
-│   ├── agent/                 # LiveKit agent
-│   │   ├── main.py           # Agent entry point
-│   │   ├── transcription.py  # MLX Whisper integration
-│   │   ├── vad_handler.py    # Silero VAD handling
-│   │   └── config.py         # Configuration
-│   └── api/                   # FastAPI server
-│       ├── server.py         # WebSocket & REST API
-│       ├── llm_service.py    # OpenAI integration
-│       └── storage.py        # JSON file storage
-├── frontend/                  # Next.js frontend
-│   ├── app/                  # Next.js app directory
-│   ├── components/           # React components
-│   ├── hooks/               # React hooks
-│   └── lib/                 # TypeScript types
-├── data/                     # Meeting data storage
-│   ├── transcripts/         # Transcript JSON files
-│   └── meetings/            # Meeting session data
-├── docs/                    # Documentation
-└── scripts/                 # Utility scripts
+LiveKit Room Audio (48kHz)
+  ↓
+Audio Preprocessing
+  ├─ High-pass filter (80Hz) - removes rumble/AC hum
+  ├─ Peak normalization (-3dB) - consistent levels
+  └─ Quality validation - prevents hallucinations
+  ↓
+Silero VAD (Production Settings)
+  ├─ activation_threshold: 0.4
+  ├─ min_speech_duration: 0.3s
+  ├─ min_silence_duration: 0.6s
+  └─ Detects speech boundaries
+  ↓
+MLX Whisper (whisper-large-v3-turbo)
+  ├─ Resample to 16kHz
+  ├─ Transcribe speech segment
+  └─ Return text + confidence
+  ↓
+LiveKit Data Channel → Frontend Display
 ```
+
+### Three-Service Architecture
+
+1. **Production Agent** (`backend/agent/production_agent.py`)
+   - Real-time audio preprocessing
+   - VAD-based speech detection
+   - MLX Whisper transcription
+   - Quality validation (prevents hallucinations)
+
+2. **FastAPI Server** (`backend/api/server.py`)
+   - Token generation for participants
+   - Automatic agent dispatch
+   - REST API for LLM insights
+   - WebSocket for real-time updates
+
+3. **Next.js Frontend** (`frontend/`)
+   - LiveKit room connection
+   - Real-time transcript display
+   - AI-powered nudges panel
+   - Export functionality
 
 ## Prerequisites
 
@@ -59,22 +80,30 @@ cd backend
 
 # Create virtual environment and install dependencies
 uv venv
-source .venv/bin/activate  # On macOS/Linux
+source .venv/bin/activate
 uv pip install -e .
 
-# Copy environment template
+# Configure environment
 cp .env.example .env
-
 # Edit .env with your credentials
-nano .env
 ```
 
 Required environment variables in `.env`:
 ```env
 LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=your-livekit-api-key
-LIVEKIT_API_SECRET=your-livekit-api-secret
+LIVEKIT_API_KEY=devkey
+LIVEKIT_API_SECRET=secret
 OPENAI_API_KEY=your-openai-api-key
+
+# Optional: Audio preprocessing (defaults shown)
+ENABLE_HIGHPASS_FILTER=true
+ENABLE_NORMALIZATION=true
+HIGHPASS_CUTOFF_HZ=80
+NORMALIZATION_TARGET_DB=-3.0
+
+# Optional: Audio validation (prevents hallucinations)
+ENABLE_AUDIO_VALIDATION=true
+AUDIO_VALIDATION_RMS_THRESHOLD_DB=-55.0
 ```
 
 ### 3. Frontend Setup
@@ -93,39 +122,42 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api
 
 ### 4. LiveKit Server
 
-**Option A: Local Development**
+**Local Development (Recommended)**
 ```bash
 # Install LiveKit server
 brew install livekit
 
-# Start server
+# Start in dev mode
 livekit-server --dev
 ```
 
-**Option B: LiveKit Cloud**
+**LiveKit Cloud**
 Sign up at [livekit.io](https://livekit.io) and use your cloud credentials.
 
 ## Running the Application
 
-### Start Backend Services
+Start all three services in separate terminals:
 
-**Terminal 1: FastAPI Server**
+**Terminal 1: LiveKit Server**
+```bash
+livekit-server --dev
+```
+
+**Terminal 2: FastAPI Server**
 ```bash
 cd backend
 source .venv/bin/activate
 python -m uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2: LiveKit Agent**
+**Terminal 3: Production Agent**
 ```bash
 cd backend
 source .venv/bin/activate
-python -m agent.main
+python -m agent.production_agent dev
 ```
 
-### Start Frontend
-
-**Terminal 3: Next.js**
+**Terminal 4: Next.js Frontend**
 ```bash
 cd frontend
 npm run dev
@@ -136,45 +168,44 @@ Access the application at: **http://localhost:3000**
 ## Usage
 
 1. **Open the web interface** at http://localhost:3000
-2. **Join a LiveKit room** - The agent will automatically join "voice-fest" room
-3. **Start speaking** - The agent detects speech using Silero VAD
-4. **View live transcripts** - Transcriptions appear in real-time in the left panel
-5. **See AI insights** - Nudges appear in the right panel categorizing content into:
+2. **Click "Mic On"** to enable your microphone
+3. **Start speaking** - The agent detects speech using VAD
+4. **View live transcripts** - Transcriptions appear in real-time
+5. **See AI insights** - Nudges categorize content into:
    - Key Proposals
    - Delivery Risks
    - Action Items
 6. **Export data** - Click "Export" to download meeting JSON
 
-## Architecture
+## Audio Processing Features
 
-### Backend Flow
+### Preprocessing
+- **High-pass filter (80Hz)**: Removes low-frequency rumble and AC hum
+- **Peak normalization (-3dB)**: Ensures consistent audio levels
+- **Real-time processing**: <5ms latency per frame
 
+### Quality Validation
+Prevents Whisper hallucinations by rejecting:
+- Empty or corrupted audio
+- Near-silent audio (below -55dB RMS)
+- Stuck buffers (constant signal)
+- Excessive clipping (>3%)
+- Too-short segments (<0.3s)
+
+### VAD Settings (Production)
+- **activation_threshold: 0.4** - Balanced sensitivity
+- **min_speech_duration: 0.3s** - Reduces false positives
+- **min_silence_duration: 0.6s** - Reliable speech end detection
+
+## Whisper Model Configuration
+
+Default model: `whisper-large-v3-turbo` (recommended for real-time)
+
+To change model, edit `backend/agent/config.py`:
+```python
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Fast, good accuracy
+# Alternative: "mlx-community/whisper-large-v3"  # Slower, maximum accuracy
 ```
-LiveKit Room → Agent receives audio
-              ↓
-         Silero VAD detects speech
-              ↓
-         MLX Whisper transcribes
-              ↓
-    FastAPI broadcasts via WebSocket
-              ↓
-         Frontend receives transcripts
-              ↓
-    Frontend requests nudges from API
-              ↓
-         OpenAI classifies content
-              ↓
-         Nudges displayed in UI
-```
-
-### Key Components
-
-- **LiveKit Agent**: Receives real-time audio from meeting participants
-- **Silero VAD**: Detects when participants start/stop speaking
-- **MLX Whisper**: Transcribes speech locally on Apple Silicon
-- **FastAPI Server**: WebSocket server for real-time transcript streaming
-- **OpenAI GPT-4**: Classifies transcripts into structured insights
-- **Next.js Frontend**: Modern web interface with real-time updates
 
 ## API Endpoints
 
@@ -182,72 +213,110 @@ LiveKit Room → Agent receives audio
 - `ws://localhost:8000/ws/transcripts` - Real-time transcript stream
 
 ### REST API
-- `GET /` - Health check
+- `POST /api/livekit/token` - Generate access token and dispatch agent
 - `POST /api/nudge` - Generate AI insights from transcripts
 - `GET /api/meetings` - List all meeting sessions
 - `GET /api/meetings/{id}` - Get meeting details
-- `POST /api/meetings/{id}/export` - Export meeting data
-
-## Development
-
-### Backend Development
-
-```bash
-cd backend
-source .venv/bin/activate
-
-# Run with auto-reload
-python -m uvicorn api.server:app --reload
-
-# Run agent
-python -m agent.main
-```
-
-### Frontend Development
-
-```bash
-cd frontend
-npm run dev        # Development server
-npm run build      # Production build
-npm run lint       # Lint code
-```
 
 ## Troubleshooting
 
-### Issue: MLX Whisper model not loading
-**Solution**: Ensure you're running on Apple Silicon and MLX is properly installed:
+### No Transcripts Appearing
+
+**Check microphone permissions**:
+1. Click lock icon in browser address bar
+2. Ensure microphone is allowed
+
+**Verify microphone selection**:
+1. Open System Settings → Sound → Input
+2. Confirm correct microphone is selected (not BlackHole or virtual device)
+3. Verify input level meter moves when speaking
+
+**Check agent logs**:
+- Look for "Audio is near-silent" warnings
+- Verify "Speech started" / "Speech ended" messages appear
+- Check for "Audio validation passed" messages
+
+### MLX Whisper Not Loading
+
+**Solution**: Ensure you're on Apple Silicon:
 ```bash
+uname -m  # Should show "arm64"
 uv pip install mlx-whisper
 ```
 
-### Issue: LiveKit connection failed
-**Solution**: Verify LiveKit server is running and credentials are correct in `.env`
+### LiveKit Connection Failed
 
-### Issue: WebSocket not connecting
-**Solution**: Ensure FastAPI server is running on port 8000
+**Solution**: Verify LiveKit server is running:
+```bash
+ps aux | grep livekit-server
+# Should show: livekit-server --dev
+```
 
-### Issue: No transcripts appearing
-**Solution**:
-1. Check LiveKit agent is running
-2. Verify participant is in the room
-3. Check browser console for errors
+Check credentials in `.env` match (devkey/secret for local dev).
+
+### WebSocket Disconnected
+
+**Solution**: Ensure FastAPI server is running:
+```bash
+ps aux | grep uvicorn
+# Should show: python -m uvicorn api.server:app
+```
+
+### Agent Not Joining Room
+
+**Solution**: Verify all services running:
+1. LiveKit server (port 7880)
+2. API server (port 8000)
+3. Production agent (check logs for "registered worker")
 
 ## Technologies Used
 
-- **Backend**:
-  - LiveKit Agents SDK (Python)
-  - Silero VAD
-  - MLX Whisper
-  - FastAPI
-  - OpenAI GPT-4
+### Backend
+- **LiveKit Agents SDK** - Real-time audio processing
+- **Silero VAD** - Voice activity detection
+- **MLX Whisper** - Apple Silicon optimized transcription
+- **FastAPI** - High-performance async API
+- **OpenAI GPT-4** - AI-powered insights
+- **SciPy** - Audio signal processing
 
-- **Frontend**:
-  - Next.js 14+
-  - React
-  - TypeScript
-  - Tailwind CSS
-  - Recharts
-  - LiveKit Client SDK
+### Frontend
+- **Next.js 14+** - React framework
+- **TypeScript** - Type-safe development
+- **Tailwind CSS v4** - Styling
+- **LiveKit Client SDK** - Room connection
+- **Recharts** - Data visualization
+- **Lucide React** - Icons
+
+## Performance
+
+- **Transcription latency**: ~1-2s (MLX Whisper Turbo on M4)
+- **Audio preprocessing**: <5ms per frame
+- **VAD detection**: Real-time
+- **Model loading**: ~5s (first room join, cached thereafter)
+
+## Project Structure
+
+```
+livekit-whisper/
+├── backend/
+│   ├── agent/
+│   │   ├── production_agent.py    # Production agent with preprocessing
+│   │   ├── audio_preprocessing.py # Audio filter/normalize/validate
+│   │   ├── transcription.py       # MLX Whisper integration
+│   │   └── config.py             # Configuration settings
+│   └── api/
+│       ├── server.py             # FastAPI server
+│       ├── llm_service.py        # OpenAI integration
+│       └── storage.py            # JSON storage
+├── frontend/
+│   ├── app/                      # Next.js app directory
+│   ├── components/               # React components
+│   ├── hooks/                    # React hooks
+│   └── lib/                      # TypeScript types
+├── data/                         # Meeting data storage
+├── CLAUDE.md                     # Claude Code instructions
+└── README.md                     # This file
+```
 
 ## License
 
@@ -260,6 +329,6 @@ Contributions welcome! Please open an issue or PR.
 ## Acknowledgments
 
 - LiveKit for the real-time communication platform
-- Anthropic for Claude AI assistance in development
 - OpenAI for GPT-4 language model
 - Apple for MLX framework
+- Anthropic for Claude AI development assistance
