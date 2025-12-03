@@ -9,6 +9,7 @@ import os
 import sys
 import aiohttp
 from livekit import api
+from livekit.api.agent_dispatch_service import AgentDispatchService
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -134,7 +135,7 @@ async def get_livekit_token(request: TokenRequest):
                 dispatch_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
 
                 # Create agent dispatch service
-                dispatch_service = api.AgentDispatchService(
+                dispatch_service = AgentDispatchService(
                     api_key=config.LIVEKIT_API_KEY,
                     api_secret=config.LIVEKIT_API_SECRET,
                     url=dispatch_url
