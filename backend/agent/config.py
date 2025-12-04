@@ -13,14 +13,22 @@ WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Faster, good accuracy
 VAD_THRESHOLD = 0.5
 
 # Audio preprocessing settings (lightweight)
+# BALANCED: High-pass enabled, normalization disabled
 ENABLE_HIGHPASS_FILTER = os.getenv("ENABLE_HIGHPASS_FILTER", "true").lower() == "true"
-ENABLE_NORMALIZATION = os.getenv("ENABLE_NORMALIZATION", "true").lower() == "true"
-HIGHPASS_CUTOFF_HZ = int(os.getenv("HIGHPASS_CUTOFF_HZ", "80"))  # Hz
-NORMALIZATION_TARGET_DB = float(os.getenv("NORMALIZATION_TARGET_DB", "-3.0"))  # dB
+ENABLE_NORMALIZATION = os.getenv("ENABLE_NORMALIZATION", "false").lower() == "true"
+HIGHPASS_CUTOFF_HZ = int(os.getenv("HIGHPASS_CUTOFF_HZ", "100"))  # Hz - removes rumble/hum
+NORMALIZATION_TARGET_DB = float(os.getenv("NORMALIZATION_TARGET_DB", "-3.0"))  # dB - prevents clipping
 
 # Audio quality validation (prevents Whisper hallucinations)
+# BALANCED: Moderate threshold to filter bad audio
 ENABLE_AUDIO_VALIDATION = os.getenv("ENABLE_AUDIO_VALIDATION", "true").lower() == "true"
-AUDIO_VALIDATION_RMS_THRESHOLD_DB = float(os.getenv("AUDIO_VALIDATION_RMS_THRESHOLD_DB", "-55.0"))
+AUDIO_VALIDATION_RMS_THRESHOLD_DB = float(os.getenv("AUDIO_VALIDATION_RMS_THRESHOLD_DB", "-48.0"))
+
+# Segmentation settings
+CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
+SEGMENT_MIN_WORDS = int(os.getenv("SEGMENT_MIN_WORDS", "20"))  # Min words before topic change allowed
+SEGMENT_MAX_WORDS = int(os.getenv("SEGMENT_MAX_WORDS", "500"))  # Force new segment if exceeded
+SEGMENT_CONTEXT_SIZE = int(os.getenv("SEGMENT_CONTEXT_SIZE", "5"))  # Recent transcripts for LLM context
 
 # Storage settings
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")

@@ -28,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import config
 from agent.transcription import load_whisper_model, transcribe_audio
 from agent import audio_preprocessing
+from agent.segment_manager import SegmentManager
+from agent.llm_classifier_worker import LLMClassifierClient
 
 import numpy as np
 from scipy import signal as scipy_signal
@@ -38,6 +40,9 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("production-agent")
+
+# Global state: Track segment managers per meeting
+segment_managers = {}
 
 
 def format_timestamp() -> str:
@@ -69,6 +74,9 @@ async def process_audio_with_vad(
     # Create VAD stream (one per participant)
     vad_stream = vad.stream()
 
+    # Track background transcription tasks to prevent speech loss
+    transcription_tasks = []
+
     # Task 1: Push audio frames from track to VAD
     async def push_audio_frames():
         """Push audio frames to VAD with lightweight preprocessing"""
@@ -89,10 +97,24 @@ async def process_audio_with_vad(
                         logger.debug("Skipping empty audio frame")
                         continue
 
-                    # Apply preprocessing pipeline
+                    # PERFORMANCE FIX: Resample to 16kHz BEFORE preprocessing
+                    # This makes VAD 3x faster (processes 16kHz instead of 48kHz)
+                    source_sample_rate = original_frame.sample_rate
+                    target_sample_rate = 16000  # VAD is configured for 16kHz
+
+                    if source_sample_rate != target_sample_rate:
+                        # Efficient downsampling: 48kHz → 16kHz (3:1 decimation)
+                        if source_sample_rate == 48000 and target_sample_rate == 16000:
+                            audio_data = resample_poly(audio_data, 1, 3)
+                        else:
+                            # Fallback for other sample rates
+                            num_samples = int(len(audio_data) * target_sample_rate / source_sample_rate)
+                            audio_data = scipy_signal.resample(audio_data, num_samples)
+
+                    # Apply preprocessing pipeline at 16kHz (3x faster than at 48kHz)
                     processed_audio = audio_preprocessing.preprocess_audio_frame(
                         audio_data,
-                        sample_rate=original_frame.sample_rate,
+                        sample_rate=target_sample_rate,
                         apply_highpass=config.ENABLE_HIGHPASS_FILTER,
                         apply_normalization=config.ENABLE_NORMALIZATION
                     )
@@ -100,15 +122,15 @@ async def process_audio_with_vad(
                     # Convert back to int16
                     processed_int16 = (processed_audio * 32768.0).astype(np.int16)
 
-                    # Create new AudioFrame with preprocessed audio
+                    # Create new AudioFrame at 16kHz for VAD (no internal resampling needed)
                     preprocessed_frame = rtc.AudioFrame(
                         data=processed_int16.tobytes(),
-                        sample_rate=original_frame.sample_rate,
+                        sample_rate=target_sample_rate,
                         num_channels=original_frame.num_channels,
                         samples_per_channel=len(processed_int16)
                     )
 
-                    # Push to VAD (gets clean audio)
+                    # Push to VAD (now processes at realtime speed)
                     vad_stream.push_frame(preprocessed_frame)
 
                 except ValueError as preprocessing_error:
@@ -139,13 +161,18 @@ async def process_audio_with_vad(
                     # VAD detected end of speech - event.frames contains complete segment
                     logger.info(f"✋ Speech ended: {participant_identity}, processing {len(event.frames)} frames")
 
-                    # Transcribe the complete speech segment
+                    # Transcribe the complete speech segment (non-blocking to prevent speech loss)
                     if event.frames:
-                        await transcribe_and_publish(
-                            event.frames,
-                            participant_identity,
-                            room
+                        task = asyncio.create_task(
+                            transcribe_and_publish(
+                                event.frames,
+                                participant_identity,
+                                room
+                            )
                         )
+                        transcription_tasks.append(task)
+                        # Cleanup completed tasks to prevent memory leak
+                        transcription_tasks[:] = [t for t in transcription_tasks if not t.done()]
 
         except asyncio.CancelledError:
             logger.info(f"VAD processing cancelled for {participant_identity}")
@@ -153,6 +180,10 @@ async def process_audio_with_vad(
             logger.error(f"Error processing VAD events: {e}", exc_info=True)
         finally:
             await vad_stream.aclose()
+            # Wait for any pending transcriptions to complete before shutting down
+            if transcription_tasks:
+                logger.info(f"Waiting for {len(transcription_tasks)} pending transcriptions to complete...")
+                await asyncio.gather(*transcription_tasks, return_exceptions=True)
 
     # Run both tasks concurrently
     await asyncio.gather(
@@ -191,9 +222,9 @@ async def transcribe_and_publish(
         source_sample_rate = audio_frames[0].sample_rate if audio_frames else 48000
         target_sample_rate = 16000
 
-        # Edge case: Skip very short segments (< 0.1s)
+        # PERMISSIVE: Only skip extremely short segments (< 0.2s) - mostly just clicks
         duration_seconds = len(audio_data_48k) / source_sample_rate
-        if duration_seconds < 0.1:
+        if duration_seconds < 0.2:
             logger.debug(f"Audio segment too short ({duration_seconds:.2f}s), skipping transcription")
             return
 
@@ -233,7 +264,7 @@ async def transcribe_and_publish(
             logger.debug("Empty transcription, skipping")
             return
 
-        # Detect Whisper hallucinations (repetitive patterns)
+        # BALANCED: Detect obvious hallucinations (35% threshold)
         words = text.split()
         if len(words) > 10:
             # Check for excessive word repetition (hallucination indicator)
@@ -241,9 +272,9 @@ async def transcribe_and_publish(
             for word in words:
                 word_counts[word] = word_counts.get(word, 0) + 1
 
-            # If any single word appears more than 40% of the time, it's likely hallucination
+            # Balanced threshold (35%) - catches clear hallucinations, allows some natural repetition
             max_count = max(word_counts.values())
-            if max_count > len(words) * 0.4:
+            if max_count > len(words) * 0.35:
                 logger.warning(f"⚠️  Rejecting hallucinated transcript: repetitive pattern detected ('{max(word_counts, key=word_counts.get)}' repeated {max_count}/{len(words)} times)")
                 return
 
@@ -271,6 +302,19 @@ async def transcribe_and_publish(
             topic="transcription"
         )
         logger.info(f"Published transcript to room")
+
+        # Add to segment manager for topic segmentation
+        if room.name in segment_managers:
+            logger.info(f"📤 Adding transcript to SegmentManager for classification")
+            manager = segment_managers[room.name]
+            manager.add_transcript(
+                timestamp=timestamp,
+                text=text,
+                speaker=participant_identity
+            )
+            logger.info(f"✅ Transcript added to SegmentManager (will be processed asynchronously)")
+        else:
+            logger.warning(f"⚠️  No SegmentManager found for room {room.name}, skipping classification")
 
     except Exception as e:
         logger.error(f"Error in transcribe_and_publish: {e}", exc_info=True)
@@ -301,15 +345,22 @@ def prewarm(proc: JobProcess):
         logger.info("   - Audio quality validation: disabled")
 
     proc.userdata["vad"] = silero.VAD.load(
-        activation_threshold=0.4,       # Production: balanced sensitivity
-        min_speech_duration=0.3,        # Production: reduces false positives
-        min_silence_duration=0.6,       # Production: more reliable speech end detection
-        prefix_padding_duration=0.3,    # Keep: captures word starts
+        activation_threshold=0.5,       # BALANCED: Good speech detection
+        min_speech_duration=0.4,        # BALANCED: Filters brief noise
+        min_silence_duration=0.7,       # BALANCED: Natural pause detection
+        prefix_padding_duration=0.3,    # BALANCED: Captures word starts
         max_buffered_speech=60.0,       # Keep as-is
         sample_rate=16000               # Keep as-is
     )
 
     logger.info("✅ VAD loaded with optimized settings for real-time transcription")
+
+    # Create LLM classifier client (runs in separate process for CPU isolation)
+    logger.info("🔧 Creating LLM classifier client (separate process)...")
+    classifier_client = LLMClassifierClient()  # Uses default model
+    classifier_client.start()
+    logger.info("✅ LLM classifier worker process started")
+    proc.userdata["classifier_client"] = classifier_client
 
 
 async def entrypoint(ctx: JobContext):
@@ -339,14 +390,23 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"✅ No duplicate agents detected in room: {room.name}")
 
-    # Get pre-warmed VAD
+    # Get pre-warmed models
     vad = ctx.proc.userdata["vad"]
+    classifier_client = ctx.proc.userdata["classifier_client"]
 
     # Load Whisper model
     logger.info(f"📥 Loading Whisper model: {config.WHISPER_MODEL}")
     load_whisper_model(config.WHISPER_MODEL)
 
     logger.info(f"✅ Connected to room: {room.name}")
+
+    # Create segment manager for this meeting (uses classifier client in separate process)
+    segment_managers[room.name] = SegmentManager(
+        meeting_id=room.name,
+        room=room,
+        classifier_client=classifier_client
+    )
+    logger.info(f"✅ SegmentManager created for room: {room.name}")
 
     # Track audio processing tasks
     participant_tasks = {}
@@ -410,6 +470,12 @@ async def entrypoint(ctx: JobContext):
         if participant_tasks:
             await asyncio.gather(*participant_tasks.values(), return_exceptions=True)
 
+        # Cleanup segment manager
+        if room.name in segment_managers:
+            logger.info("🧹 Cleaning up segment manager...")
+            await segment_managers[room.name].cleanup()
+            del segment_managers[room.name]
+
         logger.info("✅ Agent shutdown complete")
 
 
@@ -422,5 +488,6 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             worker_type=WorkerType.ROOM,  # Auto-join rooms when participants connect
+            agent_name="production-agent",  # Must match agent_name in API dispatch
         )
     )

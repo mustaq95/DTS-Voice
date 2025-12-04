@@ -134,18 +134,37 @@ async def get_livekit_token(request: TokenRequest):
                 # Convert ws:// to http:// for dispatch service URL
                 dispatch_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
 
-                # Create agent dispatch service
-                dispatch_service = AgentDispatchService(
+                # # Create agent dispatch service
+                # dispatch_service = AgentDispatchService(
+                #     api_key=config.LIVEKIT_API_KEY,
+                #     api_secret=config.LIVEKIT_API_SECRET,
+                #     url=dispatch_url
+                # )
+
+                # # Dispatch agent to room
+                # await dispatch_service.create_dispatch(
+                #     room=request.room_name,
+                #     agent_name="production-agent"
+                # )
+
+                # Use LiveKitAPI (this sets up AgentDispatchService with a session)
+                lkapi = api.LiveKitAPI(
+                    url=dispatch_url,
                     api_key=config.LIVEKIT_API_KEY,
                     api_secret=config.LIVEKIT_API_SECRET,
-                    url=dispatch_url
                 )
 
-                # Dispatch agent to room
-                await dispatch_service.create_dispatch(
-                    room=request.room_name,
-                    agent_name="production-agent"
+                # Create explicit dispatch
+                await lkapi.agent_dispatch.create_dispatch(
+                    api.CreateAgentDispatchRequest(
+                        agent_name="production-agent",   # must match your WorkerOptions.agentName
+                        room=request.room_name,
+                        # optional metadata
+                        metadata=json.dumps({"requested_by": request.participant_name}),
+                    )
                 )
+
+                await lkapi.aclose()
 
                 dispatched_rooms.add(request.room_name)
                 logger.info(f"🤖 Agent dispatched to room: {request.room_name}")
@@ -257,6 +276,67 @@ async def list_meetings():
             logger.error(f"Error loading meeting {file_path}: {e}")
 
     return {"meetings": meetings}
+
+
+@app.get("/api/meetings/{meeting_id}/state")
+async def get_meeting_state(meeting_id: str):
+    """
+    Get current segmentation state for a meeting.
+    Returns completed segments + active buffer.
+    """
+    try:
+        # Read from data/meetings/{meeting_id}/segments.json
+        segments_file = os.path.join(
+            config.DATA_DIR,
+            "meetings",
+            meeting_id,
+            "segments.json"
+        )
+
+        if os.path.exists(segments_file):
+            with open(segments_file, 'r') as f:
+                return json.load(f)
+        else:
+            # No segments file yet - return empty state
+            return {
+                "meeting_id": meeting_id,
+                "segments": [],
+                "current_segment": None
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting meeting state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meetings/{meeting_id}/segments")
+async def get_segments(meeting_id: str):
+    """
+    Get only completed segments (no active buffer).
+    Useful for displaying finalized topics.
+    """
+    try:
+        state = await get_meeting_state(meeting_id)
+        return {"segments": state.get("segments", [])}
+
+    except Exception as e:
+        logger.error(f"Error getting segments: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meetings/{meeting_id}/buffer")
+async def get_buffer(meeting_id: str):
+    """
+    Get current active segment buffer.
+    Shows what's being actively transcribed/segmented.
+    """
+    try:
+        state = await get_meeting_state(meeting_id)
+        return state.get("current_segment", None)
+
+    except Exception as e:
+        logger.error(f"Error getting buffer: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/meetings/{meeting_id}")

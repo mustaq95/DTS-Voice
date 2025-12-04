@@ -158,11 +158,11 @@ def preprocess_audio_frame(
     # Step 1: High-pass filter (remove rumble, DC offset)
     if apply_highpass:
         processed = highpass_filter(processed, cutoff=80, sample_rate=sample_rate)
-        logger.debug("Applied high-pass filter (80Hz)")
+        # Note: Debug logging removed - happens thousands of times per second
 
     # Step 2: Peak normalization (ensure consistent levels)
     if apply_normalization:
         processed = normalize_audio(processed, target_db=-3.0)
-        logger.debug("Applied peak normalization (-3dB)")
+        # Note: Debug logging removed - happens thousands of times per second
 
     return processed

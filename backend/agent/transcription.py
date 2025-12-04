@@ -9,7 +9,7 @@ logger = logging.getLogger("meeting-agent")
 _whisper_model = None
 
 
-def load_whisper_model(model_name: str = "mlx-community/whisper-tiny"):
+def load_whisper_model(model_name: str = "mlx-community/whisper-large-v3-turbo"):
     """Load MLX Whisper model"""
     global _whisper_model
     if _whisper_model is None:
@@ -33,6 +33,7 @@ def transcribe_audio(audio_data: np.ndarray, sample_rate: int = 16000, is_final:
     try:
         # Ensure model is loaded
         model = load_whisper_model()
+        logger.info(f"🔍 Transcribing with model: {model}")
 
         # Run transcription with anti-hallucination parameters
         result = mlx_whisper.transcribe(

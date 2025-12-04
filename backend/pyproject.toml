@@ -8,6 +8,7 @@ dependencies = [
     "livekit-agents>=0.8.0",
     "livekit-plugins-silero>=0.6.0",
     "mlx-whisper>=0.3.0",
+    "mlx-lm>=0.18.0",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "websockets>=12.0",
