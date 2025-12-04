@@ -345,10 +345,10 @@ def prewarm(proc: JobProcess):
         logger.info("   - Audio quality validation: disabled")
 
     proc.userdata["vad"] = silero.VAD.load(
-        activation_threshold=0.5,       # BALANCED: Good speech detection
-        min_speech_duration=0.4,        # BALANCED: Filters brief noise
-        min_silence_duration=0.7,       # BALANCED: Natural pause detection
-        prefix_padding_duration=0.3,    # BALANCED: Captures word starts
+        activation_threshold=0.35,      # M4 OPTIMIZED: Lower threshold for softer speech
+        min_speech_duration=0.25,       # M4 OPTIMIZED: Faster detection start
+        min_silence_duration=1.2,       # M4 OPTIMIZED: Longer tolerance for natural pauses
+        prefix_padding_duration=0.4,    # M4 OPTIMIZED: More padding to capture word starts
         max_buffered_speech=60.0,       # Keep as-is
         sample_rate=16000               # Keep as-is
     )

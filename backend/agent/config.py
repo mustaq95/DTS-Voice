@@ -9,8 +9,9 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Transcription settings
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Faster, good accuracy
-VAD_THRESHOLD = 0.5
+# M4 OPTIMIZED: Turbo model with M4 Neural Engine optimizations
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Turbo model - fast & accurate on M4
+VAD_THRESHOLD = 0.35  # M4 OPTIMIZED: Lower threshold for continuous speech
 
 # Audio preprocessing settings (lightweight)
 # BALANCED: High-pass enabled, normalization disabled
@@ -20,9 +21,9 @@ HIGHPASS_CUTOFF_HZ = int(os.getenv("HIGHPASS_CUTOFF_HZ", "100"))  # Hz - removes
 NORMALIZATION_TARGET_DB = float(os.getenv("NORMALIZATION_TARGET_DB", "-3.0"))  # dB - prevents clipping
 
 # Audio quality validation (prevents Whisper hallucinations)
-# BALANCED: Moderate threshold to filter bad audio
+# M4 OPTIMIZED: More permissive threshold to capture quieter speech segments
 ENABLE_AUDIO_VALIDATION = os.getenv("ENABLE_AUDIO_VALIDATION", "true").lower() == "true"
-AUDIO_VALIDATION_RMS_THRESHOLD_DB = float(os.getenv("AUDIO_VALIDATION_RMS_THRESHOLD_DB", "-48.0"))
+AUDIO_VALIDATION_RMS_THRESHOLD_DB = float(os.getenv("AUDIO_VALIDATION_RMS_THRESHOLD_DB", "-55.0"))  # M4 OPTIMIZED
 
 # Segmentation settings
 CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
