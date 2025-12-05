@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Microphone Permission Test</title>
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 50px auto; padding: 20px; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 10px 0; }
+    .result { padding: 15px; margin: 10px 0; border-radius: 5px; }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+    .info { background: #d1ecf1; color: #0c5460; }
+  </style>
+</head>
+<body>
+  <h1>🎤 Microphone Permission Test</h1>
+  
+  <button onclick="testEnumerate()">1. Check Available Devices</button>
+  <div id="enumerate-result"></div>
+  
+  <button onclick="testPermission()">2. Request Microphone Permission</button>
+  <div id="permission-result"></div>
+  
+  <button onclick="checkPermissionState()">3. Check Current Permission State</button>
+  <div id="state-result"></div>
+
+  <script>
+    async function testEnumerate() {
+      const result = document.getElementById('enumerate-result');
+      try {
+        result.innerHTML = '<div class="info">Enumerating devices...</div>';
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        
+        if (audioInputs.length === 0) {
+          result.innerHTML = '<div class="error"><b>❌ No audio input devices found</b><br>Check if your microphone is connected.</div>';
+        } else {
+          let html = `<div class="success"><b>✓ Found ${audioInputs.length} audio input device(s):</b><ul>`;
+          audioInputs.forEach(d => {
+            html += `<li>${d.label || '(Permission needed to see label)'} [${d.deviceId.substring(0, 20)}...]</li>`;
+          });
+          html += '</ul></div>';
+          result.innerHTML = html;
+        }
+      } catch (err) {
+        result.innerHTML = `<div class="error"><b>❌ Error:</b> ${err.name} - ${err.message}</div>`;
+      }
+    }
+
+    async function testPermission() {
+      const result = document.getElementById('permission-result');
+      try {
+        result.innerHTML = '<div class="info">Requesting microphone permission...</div>';
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        result.innerHTML = '<div class="success"><b>✓ Microphone permission granted!</b><br>' +
+          'Device: ' + stream.getAudioTracks()[0].label + '</div>';
+        stream.getTracks().forEach(track => track.stop());
+      } catch (err) {
+        result.innerHTML = `<div class="error"><b>❌ Permission denied or error:</b><br>` +
+          `Error type: ${err.name}<br>Message: ${err.message}</div>`;
+      }
+    }
+
+    async function checkPermissionState() {
+      const result = document.getElementById('state-result');
+      try {
+        const status = await navigator.permissions.query({ name: 'microphone' });
+        let statusColor = status.state === 'granted' ? 'success' : 
+                         status.state === 'denied' ? 'error' : 'info';
+        result.innerHTML = `<div class="${statusColor}"><b>Current Permission State:</b> ${status.state}</div>`;
+      } catch (err) {
+        result.innerHTML = `<div class="error">Cannot check permission state: ${err.message}</div>`;
+      }
+    }
+  </script>
+</body>
+</html>
