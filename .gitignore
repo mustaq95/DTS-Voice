@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+backend/lib/
 lib64/
 parts/
 sdist/
@@ -120,3 +120,9 @@ data/llm_classifier_debug.log
 
 # Frontend documentation (generated)
 frontend.md
+
+# Project documentation (internal)
+CLAUDE.md
+project-instruction.md
+project-instructions.md
+docs/
