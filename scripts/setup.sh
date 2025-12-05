@@ -120,16 +120,20 @@ if ! command -v uv &> /dev/null; then
     print_warning "uv not found. Installing..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
-    # Add uv to PATH
-    export PATH="$HOME/.cargo/bin:$PATH"
+    # Add uv to PATH (check both possible locations)
+    if [ -f "$HOME/.local/bin/env" ]; then
+        source "$HOME/.local/bin/env"
+    fi
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
     if ! command -v uv &> /dev/null; then
-        print_error "uv installation failed. Please install manually:"
-        print_error "curl -LsSf https://astral.sh/uv/install.sh | sh"
+        print_error "uv installation failed. Please restart your shell and run:"
+        print_error "source $HOME/.local/bin/env"
+        print_error "Then run this setup script again"
         exit 1
     fi
 
-    print_status "uv installed successfully"
+    print_status "uv installed successfully ($(uv --version))"
 else
     print_status "uv already installed ($(uv --version))"
 fi
