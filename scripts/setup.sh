@@ -139,17 +139,27 @@ else
 fi
 echo ""
 
-# Step 6: Backend Setup
-echo "📋 Step 6: Setting up Python backend..."
+# Step 6: Install Python 3.13
+echo "📋 Step 6: Installing Python 3.13..."
+echo ""
+
+# Install Python 3.13 (required for package compatibility)
+print_info "Installing Python 3.13 (required for dependencies)..."
+uv python install 3.13
+print_status "Python 3.13 installed"
+echo ""
+
+# Step 7: Backend Setup
+echo "📋 Step 7: Setting up Python backend..."
 echo ""
 
 cd "$PROJECT_ROOT/backend"
 
-# Create virtual environment
+# Create virtual environment with Python 3.13
 if [ ! -d ".venv" ]; then
-    print_info "Creating Python virtual environment..."
-    uv venv
-    print_status "Virtual environment created"
+    print_info "Creating Python 3.13 virtual environment..."
+    uv venv --python 3.13
+    print_status "Virtual environment created with Python 3.13"
 else
     print_status "Virtual environment already exists"
 fi
@@ -206,8 +216,8 @@ fi
 cd "$PROJECT_ROOT"
 echo ""
 
-# Step 7: Frontend Setup
-echo "📋 Step 7: Setting up Next.js frontend..."
+# Step 8: Frontend Setup
+echo "📋 Step 8: Setting up Next.js frontend..."
 echo ""
 
 cd "$PROJECT_ROOT/frontend"
@@ -233,8 +243,8 @@ fi
 cd "$PROJECT_ROOT"
 echo ""
 
-# Step 8: Create data directory
-echo "📋 Step 8: Creating data directories..."
+# Step 9: Create data directory
+echo "📋 Step 9: Creating data directories..."
 echo ""
 
 mkdir -p data/meetings
