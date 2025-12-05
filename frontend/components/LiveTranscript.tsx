@@ -55,6 +55,14 @@ export default function LiveTranscript({ transcripts, segments }: LiveTranscript
     // No segments yet - show all transcripts ungrouped
     groupedTranscripts.push({ segment: null, transcripts: filteredTranscripts });
   } else {
+    // Build a set of transcript identifiers that are in segments
+    // Use both timestamp AND text to uniquely identify transcripts
+    const groupedIdentifiers = new Set(
+      segments.flatMap((s) =>
+        s.transcripts.map((t) => `${t.timestamp}|${t.text}`)
+      )
+    );
+
     // Group transcripts by their segments
     segments.forEach((segment) => {
       const segmentTranscripts = filteredTranscripts.filter((t) =>
@@ -66,12 +74,10 @@ export default function LiveTranscript({ transcripts, segments }: LiveTranscript
       }
     });
 
-    // Add ungrouped transcripts (not yet in any completed segment)
-    const groupedTimestamps = new Set(
-      segments.flatMap((s) => s.transcripts.map((t) => t.timestamp))
-    );
+    // Add ungrouped transcripts (not in any completed segment)
+    // This includes: noise-filtered transcripts, transcripts waiting for classification, etc.
     const ungroupedTranscripts = filteredTranscripts.filter(
-      (t) => !groupedTimestamps.has(t.timestamp)
+      (t) => !groupedIdentifiers.has(`${t.timestamp}|${t.text}`)
     );
 
     if (ungroupedTranscripts.length > 0) {

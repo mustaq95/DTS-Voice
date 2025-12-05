@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, MessageSquare } from 'lucide-react';
 import { Segment, SegmentUpdate, Transcript } from '../lib/types';
-import LiveIndicator from './LiveIndicator';
+import { useLiveDuration } from '../hooks/useLiveDuration';
 
 interface SegmentTimelineProps {
   segments: Segment[];
@@ -34,6 +34,31 @@ function formatDuration(startedAt: string, completedAt?: string): string {
   return `${seconds}s`;
 }
 
+function getActionColor(action: string): { backgroundColor: string; color: string } {
+  switch (action) {
+    case 'NEW_TOPIC':
+      return {
+        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+        color: '#ef4444'
+      };
+    case 'CONTINUE':
+      return {
+        backgroundColor: 'rgba(74, 222, 128, 0.15)',
+        color: '#4ade80'
+      };
+    case 'NOISE':
+      return {
+        backgroundColor: 'rgba(251, 191, 36, 0.2)',
+        color: '#fbbf24'
+      };
+    default:
+      return {
+        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+        color: '#3b82f6'
+      };
+  }
+}
+
 export default function SegmentTimeline({
   segments,
   currentSegment,
@@ -41,9 +66,7 @@ export default function SegmentTimeline({
   onSegmentClick,
 }: SegmentTimelineProps) {
   const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
-
-  // Get the latest transcript being classified
-  const latestTranscript = transcripts.length > 0 ? transcripts[transcripts.length - 1] : null;
+  const liveDuration = useLiveDuration(currentSegment?.segment_started_at);
 
   return (
     <div className="glass rounded-2xl p-5">
@@ -145,7 +168,7 @@ export default function SegmentTimeline({
         })}
 
         {/* Current active segment (from buffer_update) */}
-        {currentSegment && (
+        {currentSegment && currentSegment.classification_status && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -157,34 +180,45 @@ export default function SegmentTimeline({
             }}
           >
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-2">
-                <h3 className="font-semibold text-base text-[var(--color-active)]">
+              {/* Header with topic and action badge */}
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="font-semibold text-base text-[var(--color-active)] flex-1 min-w-0 truncate">
                   {currentSegment.current_topic}
                 </h3>
-                <LiveIndicator size="sm" label="CLASSIFYING" />
+                <span
+                  className="text-xs font-semibold px-2.5 py-1 rounded flex-shrink-0"
+                  style={getActionColor(currentSegment.classification_status.action)}
+                >
+                  {currentSegment.classification_status.action}
+                </span>
               </div>
-              <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)] mb-3">
+
+              {/* Classified transcript */}
+              {currentSegment.classification_status.classified_transcript && (
+                <p className="text-sm text-[var(--text-primary)] mb-2 leading-relaxed truncate">
+                  "{currentSegment.classification_status.classified_transcript}"
+                </p>
+              )}
+
+              {/* Classification reason */}
+              <p className="text-xs text-[var(--text-tertiary)] italic mb-3 leading-relaxed">
+                {currentSegment.classification_status.reason}
+              </p>
+
+              {/* Real-time metrics */}
+              <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
+                <div className="flex items-center gap-1">
+                  <Clock size={12} />
+                  <span>{liveDuration}</span>
+                </div>
                 <div className="flex items-center gap-1">
                   <MessageSquare size={12} />
-                  <span>{currentSegment.transcripts_in_buffer} messages in buffer</span>
+                  <span>
+                    {currentSegment.segment_message_count || 0} message
+                    {currentSegment.segment_message_count !== 1 ? 's' : ''}
+                  </span>
                 </div>
               </div>
-              {/* Show latest transcript being classified */}
-              {latestTranscript && (
-                <div className="mt-2 p-3 rounded-lg bg-[var(--color-surface)] bg-opacity-50 border border-[var(--border-primary)]">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium text-[var(--text-secondary)]">
-                      {latestTranscript.speaker}
-                    </span>
-                    <span className="text-xs text-[var(--text-tertiary)]">
-                      {latestTranscript.timestamp}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[var(--text-primary)] leading-relaxed line-clamp-3">
-                    &ldquo;{latestTranscript.text}&rdquo;
-                  </p>
-                </div>
-              )}
             </div>
           </motion.div>
         )}
@@ -194,9 +228,9 @@ export default function SegmentTimeline({
         <div className="mt-6 pt-4 border-t border-[var(--border-primary)]">
           <div className="text-xs text-[var(--text-tertiary)] text-center">
             <span className="font-semibold text-[var(--text-secondary)]">
-              {currentSegment?.total_segments || segments.length}
+              {segments.length + (currentSegment ? 1 : 0)}
             </span>{' '}
-            {(currentSegment?.total_segments || segments.length) === 1 ? 'segment' : 'segments'} total
+            {(segments.length + (currentSegment ? 1 : 0)) === 1 ? 'segment' : 'segments'} total
           </div>
         </div>
       )}

@@ -10,6 +10,7 @@ import SegmentAnalytics from '../components/SegmentAnalytics';
 import NudgesPanel from '../components/NudgesPanel';
 import MeetingControls from '../components/MeetingControls';
 import LiveIndicator from '../components/LiveIndicator';
+import NoiseBox from '../components/NoiseBox';
 import { useLiveKit } from '../hooks/useLiveKit';
 import { Nudge } from '../lib/types';
 import { pageTransition, buttonTap } from '../lib/animations';
@@ -27,6 +28,7 @@ export default function Home() {
     transcripts,
     segments,
     segmentUpdate,
+    noiseItems,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,
@@ -276,13 +278,14 @@ export default function Home() {
 
       {/* Main Content - 3 Column Layout */}
       <div className="flex-1 flex gap-5 p-5 overflow-hidden min-h-0">
-        {/* Left Column: Segment Timeline */}
-        <div className="w-80 flex-shrink-0 overflow-y-auto">
+        {/* Left Column: Segment Timeline + Noise Box */}
+        <div className="w-80 flex-shrink-0 flex flex-col gap-5 overflow-y-auto">
           <SegmentTimeline
             segments={segments}
             currentSegment={segmentUpdate}
             transcripts={transcripts}
           />
+          <NoiseBox noiseItems={noiseItems} />
         </div>
 
         {/* Center Column: Live Transcript (Main Focus) */}

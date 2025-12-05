@@ -92,6 +92,8 @@ class SegmentManager:
         self.segments: List[Segment] = []
         self.current_segment: Optional[Segment] = None
         self.transcript_buffer: List[Transcript] = []  # For context
+        self.waiting_transcripts: List[Transcript] = []  # Transcripts waiting for classification
+        self.last_classification: Optional[Dict] = None  # Last classification result
 
         # Concurrency control
         self._lock = asyncio.Lock()
@@ -116,6 +118,9 @@ class SegmentManager:
             speaker: Optional speaker identifier
         """
         transcript = Transcript(timestamp=timestamp, text=text, speaker=speaker)
+
+        # Add to waiting list before classification
+        self.waiting_transcripts.append(transcript)
 
         # Spawn background task (non-blocking)
         task = asyncio.create_task(self._process_transcript(transcript))
@@ -164,6 +169,21 @@ class SegmentManager:
 
             # STEP 2: Update state (needs lock)
             async with self._lock:
+                # Store classification result with timestamp and classified transcript
+                self.last_classification = {
+                    "action": classification['action'],
+                    "topic": classification['topic'],
+                    "reason": classification['reason'],
+                    "timestamp": datetime.now().isoformat(),
+                    "classified_transcript": transcript.text
+                }
+
+                # Remove from waiting list
+                self.waiting_transcripts = [
+                    t for t in self.waiting_transcripts
+                    if not (t.timestamp == transcript.timestamp and t.text == transcript.text)
+                ]
+
                 await self._handle_classification(transcript, classification)
 
             # STEP 3: Publish update (no lock needed)
@@ -295,9 +315,21 @@ class SegmentManager:
             if self.current_segment is None:
                 return
 
+            # Build enhanced buffer update with classification status
+            data = {
+                "current_topic": self.current_segment.topic,
+                "classification_status": self.last_classification,
+                "segment_started_at": self.current_segment.started_at,
+                "segment_message_count": len(self.current_segment.transcripts),
+                # Keep old fields for backward compatibility
+                "transcripts_in_buffer": len(self.waiting_transcripts),
+                "total_segments": len(self.segments) + (1 if self.current_segment else 0),
+                "waiting_transcripts": [asdict(t) for t in self.waiting_transcripts]
+            }
+
             message = {
                 "type": "buffer_update",
-                "data": self.current_segment.to_dict()
+                "data": data
             }
 
             await self.room.local_participant.publish_data(
@@ -306,7 +338,7 @@ class SegmentManager:
                 topic="segments"
             )
 
-            logger.debug(f"📡 Published buffer_update")
+            logger.debug(f"📡 Published buffer_update (buffer: {len(self.waiting_transcripts)}, status: {self.last_classification})")
 
         except Exception as e:
             logger.error(f"Failed to publish segment update: {e}", exc_info=True)

@@ -9,7 +9,7 @@ import {
   DataPacket_Kind,
   RemoteParticipant,
 } from 'livekit-client';
-import { Transcript, Segment, SegmentUpdate } from '../lib/types';
+import { Transcript, Segment, SegmentUpdate, NoiseItem } from '../lib/types';
 
 interface UseLiveKitProps {
   roomName: string;
@@ -25,6 +25,7 @@ interface UseLiveKitReturn {
   transcripts: Transcript[];
   segments: Segment[];
   segmentUpdate: SegmentUpdate | null;
+  noiseItems: NoiseItem[];
   connectToRoom: () => Promise<void>;
   disconnectFromRoom: () => Promise<void>;
   enableMicrophone: () => Promise<void>;
@@ -45,6 +46,7 @@ export function useLiveKit({
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [segmentUpdate, setSegmentUpdate] = useState<SegmentUpdate | null>(null);
+  const [noiseItems, setNoiseItems] = useState<NoiseItem[]>([]);
 
   const connectToRoom = useCallback(async () => {
     if (room && room.state === 'connected') {
@@ -124,7 +126,13 @@ export function useLiveKit({
             });
           } else if (message.type === 'noise_filtered') {
             console.log('🔇 Noise filtered:', message.data);
-            // Optionally show filtered noise in UI for debugging
+            // Store noise item with timestamp
+            const noiseItem: NoiseItem = {
+              transcript: message.data.transcript,
+              reason: message.data.reason,
+              filtered_at: new Date().toISOString()
+            };
+            setNoiseItems((prev) => [...prev, noiseItem]);
           } else {
             console.log('❌ Message type not recognized or no data:', message);
           }
@@ -154,6 +162,7 @@ export function useLiveKit({
       setTranscripts([]);
       setSegments([]);
       setSegmentUpdate(null);
+      setNoiseItems([]);
     }
   }, [room]);
 
@@ -246,6 +255,7 @@ export function useLiveKit({
     transcripts,
     segments,
     segmentUpdate,
+    noiseItems,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,
