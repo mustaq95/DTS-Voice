@@ -2,11 +2,11 @@
 name = "livekit-meeting-intelligence"
 version = "0.1.0"
 description = "Realtime meeting transcription and intelligence with LiveKit"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
-    "livekit>=0.16.0",
-    "livekit-agents>=0.8.0",
-    "livekit-plugins-silero>=0.6.0",
+    "livekit>=0.16.0,<1.0.0",
+    "livekit-agents>=1.2.0,<1.2.16",
+    "livekit-plugins-silero>=1.2.0,<1.2.16",
     "mlx-whisper>=0.3.0",
     "mlx-lm>=0.18.0",
     "fastapi>=0.104.0",
