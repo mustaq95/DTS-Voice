@@ -97,3 +97,26 @@ Thumbs.db
 *_backup.py
 production_agent_backup.py
 data/meetings/*.json
+
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Temporary logs (in /tmp)
+/tmp/*.log
+
+# Debug/temporary documentation
+DEBUGGING_SUMMARY.md
+STARTUP.md
+
+# Debug scripts
+backend/debug_*.py
+
+# Data directories (runtime generated)
+data/debug/
+data/meetings/*/
+data/*.log
+data/segmentation_debug.log
+data/llm_classifier_debug.log
+
+# Frontend documentation (generated)
+frontend.md

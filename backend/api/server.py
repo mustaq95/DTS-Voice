@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import sys
 import aiohttp
+import asyncio
 from livekit import api
 from livekit.api.agent_dispatch_service import AgentDispatchService
 
@@ -49,6 +50,8 @@ class TranscriptRequest(BaseModel):
 
 class NudgeRequest(BaseModel):
     transcripts: List[str]
+    segment_id: str | None = None  # Optional segment ID for context
+    topic: str | None = None  # Optional topic for better classification
 
 
 class NudgeResponse(BaseModel):
@@ -237,13 +240,26 @@ async def generate_nudges(request: NudgeRequest):
     - Key Proposals
     - Delivery Risks
     - Action Items
+
+    Now optimized to work with segment-based context for better semantic analysis.
     """
     try:
+        # Log segment context if provided
+        if request.segment_id and request.topic:
+            logger.info(f"📊 Generating nudges for segment '{request.topic}' (ID: {request.segment_id})")
+
         nudges = llm_service.classify_transcripts(
-            request.transcripts,
-            config.OPENAI_API_KEY
+            transcripts=request.transcripts,
+            api_key=config.OPENAI_API_KEY,
+            topic=request.topic  # Pass topic for enhanced context
         )
 
+        # Add segment_id to each nudge for tracking
+        if request.segment_id:
+            for nudge in nudges:
+                nudge['segment_id'] = request.segment_id
+
+        logger.info(f"✅ Generated {len(nudges)} nudges")
         return {"nudges": nudges}
 
     except Exception as e:
@@ -372,6 +388,72 @@ async def export_meeting(meeting_id: str):
     except Exception as e:
         logger.error(f"Error exporting meeting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/redeploy")
+async def redeploy_system():
+    """
+    Redeploy the entire system by running stop.sh and start.sh scripts.
+    This restarts all services (LiveKit, backend, frontend) from scratch.
+
+    The restart happens in a detached background process to survive the API shutdown.
+    """
+    try:
+        # Get the project root directory (parent of backend)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        stop_script = os.path.join(project_root, "stop.sh")
+        start_script = os.path.join(project_root, "start.sh")
+
+        logger.info("🔄 Starting system redeployment...")
+
+        # Check if scripts exist
+        if not os.path.exists(stop_script):
+            raise HTTPException(status_code=404, detail=f"stop.sh not found at {stop_script}")
+        if not os.path.exists(start_script):
+            raise HTTPException(status_code=404, detail=f"start.sh not found at {start_script}")
+
+        # Create a shell script that will run stop.sh and start.sh in sequence
+        # This needs to run in a completely detached process that survives after this API dies
+        restart_command = f'''
+        nohup bash -c '
+            cd {project_root}
+            echo "🔄 Redeployment initiated at $(date)" >> /tmp/redeploy.log
+
+            # Stop all services
+            echo "Stopping services..." >> /tmp/redeploy.log
+            bash {stop_script} >> /tmp/redeploy.log 2>&1
+
+            # Wait for complete shutdown
+            sleep 3
+
+            # Start all services
+            echo "Starting services..." >> /tmp/redeploy.log
+            bash {start_script} >> /tmp/redeploy.log 2>&1
+
+            echo "✅ Redeployment completed at $(date)" >> /tmp/redeploy.log
+        ' > /dev/null 2>&1 &
+        '''
+
+        # Execute the detached restart process
+        logger.info("Launching detached restart process...")
+        await asyncio.create_subprocess_shell(
+            restart_command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True  # Detach from parent process
+        )
+
+        logger.info("✅ Redeployment initiated in background")
+
+        return {
+            "status": "success",
+            "message": "System redeployment initiated. Services are restarting...",
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error during redeployment: {e}")
+        raise HTTPException(status_code=500, detail=f"Redeployment failed: {str(e)}")
 
 
 # Utility function for agents to broadcast via WebSocket

@@ -34,13 +34,14 @@ Return only the JSON array, no other text.
 """
 
 
-def classify_transcripts(transcripts: List[str], api_key: str) -> List[Dict[str, Any]]:
+def classify_transcripts(transcripts: List[str], api_key: str, topic: str | None = None) -> List[Dict[str, Any]]:
     """
     Classify transcript content using OpenAI
 
     Args:
         transcripts: List of transcript text strings
         api_key: OpenAI API key
+        topic: Optional topic/segment name for enhanced context
 
     Returns:
         List of classified nudges
@@ -49,6 +50,10 @@ def classify_transcripts(transcripts: List[str], api_key: str) -> List[Dict[str,
 
     # Join transcripts into a single string
     transcript_text = "\n".join([f"- {t}" for t in transcripts])
+
+    # Add topic context if provided
+    if topic:
+        transcript_text = f"[Topic: {topic}]\n\n{transcript_text}"
 
     # Create the prompt
     prompt = CLASSIFICATION_PROMPT.format(transcripts=transcript_text)
