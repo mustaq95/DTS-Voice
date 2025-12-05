@@ -155,13 +155,23 @@ echo ""
 
 cd "$PROJECT_ROOT/backend"
 
-# Create virtual environment with Python 3.13
-if [ ! -d ".venv" ]; then
+# Check if venv exists and is using correct Python version
+if [ -d ".venv" ]; then
+    VENV_PYTHON_VERSION=$(.venv/bin/python --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
+    if [[ "$VENV_PYTHON_VERSION" != "3.13" ]]; then
+        print_warning "Existing venv uses Python $VENV_PYTHON_VERSION, but we need 3.13"
+        print_info "Removing old virtual environment..."
+        rm -rf .venv
+        print_info "Creating Python 3.13 virtual environment..."
+        uv venv --python 3.13
+        print_status "Virtual environment recreated with Python 3.13"
+    else
+        print_status "Virtual environment already exists with Python 3.13"
+    fi
+else
     print_info "Creating Python 3.13 virtual environment..."
     uv venv --python 3.13
     print_status "Virtual environment created with Python 3.13"
-else
-    print_status "Virtual environment already exists"
 fi
 
 # Activate virtual environment
