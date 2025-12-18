@@ -63,6 +63,19 @@ class TokenRequest(BaseModel):
     participant_name: str
 
 
+class ModelConfigRequest(BaseModel):
+    room_name: str
+    model: str  # "mlx_whisper" or "hamza"
+
+
+class ModelConfigResponse(BaseModel):
+    status: str
+    room_name: str
+    previous_model: str
+    current_model: str
+    message: str
+
+
 # WebSocket manager
 class ConnectionManager:
     def __init__(self):
@@ -454,6 +467,100 @@ async def redeploy_system():
     except Exception as e:
         logger.error(f"Error during redeployment: {e}")
         raise HTTPException(status_code=500, detail=f"Redeployment failed: {str(e)}")
+
+
+@app.post("/api/config/model", response_model=ModelConfigResponse)
+async def switch_transcription_model(request: ModelConfigRequest):
+    """Switch transcription model for a room at runtime (mid-session)."""
+    try:
+        # Validate model
+        valid_models = ["mlx_whisper", "hamza"]
+        if request.model not in valid_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model. Must be one of: {valid_models}"
+            )
+
+        # Get previous model (from config default)
+        previous_model = config.TRANSCRIPTION_ENGINE
+
+        # Send model switch command via LiveKit data channel
+        # The agent process will receive this and update its local dict
+        dispatch_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+
+        lkapi = api.LiveKitAPI(
+            url=dispatch_url,
+            api_key=config.LIVEKIT_API_KEY,
+            api_secret=config.LIVEKIT_API_SECRET,
+        )
+
+        # Send data message to room with model switch command
+        message = {
+            "type": "model_switch",
+            "data": {
+                "model": request.model,
+                "room_name": request.room_name
+            }
+        }
+
+        # Use SendDataRequest to send data to room
+        send_request = api.SendDataRequest(
+            room=request.room_name,
+            data=json.dumps(message).encode('utf-8'),
+            destination_identities=[],  # Broadcast to all participants (agent will receive)
+        )
+
+        await lkapi.room.send_data(send_request)
+
+        await lkapi.aclose()
+
+        logger.info(f"🔄 Model switch command sent to room: {request.room_name} → {request.model}")
+
+        # IMPORTANT: Save to file for agent to read (data messages don't reach agents)
+        from agent.model_config import save_model_config
+        save_model_config(request.room_name, request.model)
+        logger.info(f"💾 Saved model config to file: {request.room_name} → {request.model}")
+
+        # Pre-initialize Hamza WebSocket in API server (optional, for health checks)
+        if request.model == "hamza":
+            from agent.hamza_transcription import get_hamza_client
+            try:
+                hamza_client = await get_hamza_client()
+                if hamza_client is None:
+                    logger.warning("⚠️  Hamza client initialization failed in API server")
+            except Exception as e:
+                logger.warning(f"⚠️  Hamza initialization error: {e}")
+
+        return ModelConfigResponse(
+            status="success",
+            room_name=request.room_name,
+            previous_model=previous_model,
+            current_model=request.model,
+            message=f"Model switch command sent: '{request.model}'"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending model switch command: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/model/{room_name}")
+async def get_current_model(room_name: str):
+    """Get current transcription model for a room."""
+    try:
+        # Return default from config (agent initializes with this)
+        # Note: After model switches, this won't reflect the actual state
+        # For accurate state, would need to query room metadata
+        return {
+            "room_name": room_name,
+            "current_model": config.TRANSCRIPTION_ENGINE,
+            "note": "Default model - may not reflect mid-session switches"
+        }
+    except Exception as e:
+        logger.error(f"Error getting current model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Utility function for agents to broadcast via WebSocket

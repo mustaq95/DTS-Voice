@@ -35,3 +35,18 @@ SEGMENT_CONTEXT_SIZE = int(os.getenv("SEGMENT_CONTEXT_SIZE", "5"))  # Recent tra
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 MEETINGS_DIR = os.path.join(DATA_DIR, "meetings")
+
+# Transcription Engine Settings
+TRANSCRIPTION_ENGINE = os.getenv("TRANSCRIPTION_ENGINE", "mlx_whisper")
+
+# Hamza WebSocket STT Configuration
+HAMZA_WS_URL = os.getenv("HAMZA_WS_URL", "wss://beta.govgpt.gov.ae/llm/hamsa/ws")
+HAMZA_API_KEY = os.getenv("HAMZA_API_KEY", "")
+HAMZA_MIN_SILENCE_MS = int(os.getenv("HAMZA_MIN_SILENCE_MS", "1200"))
+HAMZA_MIN_SPEECH_MS = int(os.getenv("HAMZA_MIN_SPEECH_MS", "250"))
+HAMZA_VAD_THRESHOLD = float(os.getenv("HAMZA_VAD_THRESHOLD", "0.35"))
+
+# Hamza EOS (End-of-Stream) and Silence Configuration
+HAMZA_SILENCE_TIMEOUT_MS = int(os.getenv("HAMZA_SILENCE_TIMEOUT_MS", "3000"))
+HAMZA_EOS_ENABLED = os.getenv("HAMZA_EOS_ENABLED", "true").lower() == "true"
+HAMZA_EOS_THRESHOLD = float(os.getenv("HAMZA_EOS_THRESHOLD", "0.6"))
