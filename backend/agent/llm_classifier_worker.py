@@ -9,6 +9,11 @@ import os
 import multiprocessing as mp
 from typing import Dict, Optional
 from queue import Empty
+import sys
+
+# Add parent directory to path for imports (since this runs in separate process)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from prompts import SEGMENTATION_PROMPT
 
 logger = logging.getLogger("llm-classifier-worker")
 
@@ -85,27 +90,8 @@ def _classify(
         from mlx_lm import stream_generate
         from mlx_lm.sample_utils import make_sampler
 
-        # Build prompt
-        context_str = "\n".join(f"- {ctx}" for ctx in recent_context) if recent_context else "No prior context"
-        topic_str = current_topic if current_topic else "No current topic (first transcript)"
-
-        prompt = f"""You are analyzing meeting transcripts to detect topic changes.
-
-Current Topic: {topic_str}
-
-Recent Context:
-{context_str}
-
-New Transcript: "{new_transcript}"
-
-Task: Classify this new transcript as:
-- CONTINUE: Transcript continues the current topic
-- NEW_TOPIC: Transcript introduces a new topic (provide a concise topic name)
-- NOISE: Transcript is noise/irrelevant (e.g., "um", "uh", background noise)
-
-Respond ONLY with valid JSON in this exact format:
-{{"action": "CONTINUE|NEW_TOPIC|NOISE", "topic": "topic name", "reason": "brief explanation"}}
-"""
+        # Build prompt using centralized template
+        prompt = SEGMENTATION_PROMPT(current_topic, recent_context, new_transcript)
 
         # Generate response
         llm_logger.info("--- LLM GENERATION START ---")

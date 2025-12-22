@@ -7,6 +7,8 @@ import json
 import os
 from typing import List, Dict, Optional
 
+from prompts import SEGMENTATION_PROMPT
+
 # LAZY IMPORT: Move heavy MLX-LM imports inside functions to avoid slow module load
 # from mlx_lm import load, stream_generate
 # from mlx_lm.sample_utils import make_sampler
@@ -105,27 +107,8 @@ async def classify_transcript(
         logger.info("✅ Using provided classifier model")
         model, tokenizer = model_tuple
 
-    # Build prompt
-    context_str = "\n".join(f"- {ctx}" for ctx in recent_context) if recent_context else "No prior context"
-    topic_str = current_topic if current_topic else "No current topic (first transcript)"
-
-    prompt = f"""You are analyzing meeting transcripts to detect topic changes.
-
-Current Topic: {topic_str}
-
-Recent Context:
-{context_str}
-
-New Transcript: "{new_transcript}"
-
-Task: Classify this new transcript as:
-- CONTINUE: Transcript continues the current topic
-- NEW_TOPIC: Transcript introduces a new topic (provide a concise topic name)
-- NOISE: Transcript is noise/irrelevant (e.g., "um", "uh", background noise)
-
-Respond ONLY with valid JSON in this exact format:
-{{"action": "CONTINUE|NEW_TOPIC|NOISE", "topic": "topic name", "reason": "brief explanation"}}
-"""
+    # Build prompt using centralized template
+    prompt = SEGMENTATION_PROMPT(current_topic, recent_context, new_transcript)
 
     try:
         # Lazy import: Only import MLX-LM functions when actually generating
