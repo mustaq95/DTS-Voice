@@ -10,10 +10,12 @@ import multiprocessing as mp
 from typing import Dict, Optional
 from queue import Empty
 import sys
+import requests
 
 # Add parent directory to path for imports (since this runs in separate process)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from prompts import SEGMENTATION_PROMPT
+from agent import config
 
 logger = logging.getLogger("llm-classifier-worker")
 
@@ -65,33 +67,120 @@ def _load_model(model_path: str = "mlx-community/Qwen2.5-1.5B-Instruct-4bit"):
         raise
 
 
+def _classify_cloud(
+    current_topic: Optional[str],
+    recent_context: list,
+    new_transcript: str,
+    existing_segments: str = ""
+) -> Dict[str, str]:
+    """
+    Classify using Qwen Cloud API (runs in worker process).
+
+    Args:
+        current_topic: Current segment topic
+        recent_context: List of recent transcript texts
+        new_transcript: New transcript to classify
+        existing_segments: String list of already created segment topics (for deduplication)
+
+    Returns:
+        dict: Classification result
+    """
+    try:
+        # Build prompt using centralized template
+        prompt = SEGMENTATION_PROMPT(current_topic, recent_context, new_transcript, existing_segments)
+
+        llm_logger.info("--- CLOUD LLM GENERATION START ---")
+        llm_logger.info(f"Using Cloud API: {config.QWEN_CLOUD_MODEL}")
+        llm_logger.info(f"Prompt:\n{prompt}")
+
+        # Call Qwen Cloud API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.QWEN_CLOUD_API_KEY}"
+        }
+
+        payload = {
+            "model": config.QWEN_CLOUD_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "settings": {
+                "temperature": 0.3,
+                "topP": 0.7,
+                "topK": 0.8,
+                "maxOutputTokens": 150,
+                "thinkingConfig": {"includeThoughts": False}
+            }
+        }
+
+        response = requests.post(config.QWEN_CLOUD_API_URL, headers=headers, json=payload, timeout=30)
+
+        if response.status_code != 200:
+            raise RuntimeError(f"API Error {response.status_code}: {response.text}")
+
+        data = response.json()
+        response_text = data["choices"][0]["message"]["content"]
+
+        llm_logger.info(f"Raw Cloud API Response:\n{response_text}")
+        llm_logger.info("--- CLOUD LLM GENERATION END ---")
+
+        # Parse JSON response
+        result = _parse_response(response_text)
+
+        if result is None:
+            logger.warning("⚠️  Cloud API parsing failed, using fallback")
+            llm_logger.warning("CLOUD API PARSING FAILED - Using fallback")
+            fallback = _fallback_response(current_topic)
+            llm_logger.info(f"Fallback response: {fallback}")
+            return fallback
+
+        logger.info(f"✅ Cloud Classification: {result['action']} → {result['topic']} ({result['reason']})")
+        llm_logger.info(f"Parsed successfully: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Cloud API classification failed: {e}", exc_info=True)
+        llm_logger.error(f"CLOUD API EXCEPTION: {e}", exc_info=True)
+        fallback = _fallback_response(current_topic)
+        llm_logger.info(f"Using fallback due to exception: {fallback}")
+        return fallback
+
+
 def _classify(
     model,
     tokenizer,
     current_topic: Optional[str],
     recent_context: list,
-    new_transcript: str
+    new_transcript: str,
+    existing_segments: str = ""
 ) -> Dict[str, str]:
     """
     Classify a transcript using LLM (runs in worker process).
 
     Args:
-        model: MLX model
-        tokenizer: MLX tokenizer
+        model: MLX model (None if cloud mode)
+        tokenizer: MLX tokenizer (None if cloud mode)
         current_topic: Current segment topic
         recent_context: List of recent transcript texts
         new_transcript: New transcript to classify
+        existing_segments: String list of already created segment topics (for deduplication)
 
     Returns:
         dict: Classification result
     """
+    # Check classifier mode and route to appropriate implementation
+    if config.CLASSIFIER_MODE == "cloud":
+        logger.info(f"🌐 Using CLOUD classifier: {config.QWEN_CLOUD_MODEL}")
+        return _classify_cloud(current_topic, recent_context, new_transcript, existing_segments)
+
+    # Local MLX-LM mode
+    logger.info(f"💻 Using LOCAL classifier: {config.CLASSIFIER_MODEL}")
+
     try:
         # Import MLX-LM functions
         from mlx_lm import stream_generate
         from mlx_lm.sample_utils import make_sampler
 
         # Build prompt using centralized template
-        prompt = SEGMENTATION_PROMPT(current_topic, recent_context, new_transcript)
+        prompt = SEGMENTATION_PROMPT(current_topic, recent_context, new_transcript, existing_segments)
 
         # Generate response
         llm_logger.info("--- LLM GENERATION START ---")
@@ -215,10 +304,19 @@ def worker_process(request_queue: mp.Queue, response_queue: mp.Queue, model_path
     )
 
     logger.info("🚀 LLM Classifier Worker Process starting...")
+    logger.info(f"📊 Classifier Mode: {config.CLASSIFIER_MODE.upper()}")
 
     try:
-        # Load model once at startup
-        model, tokenizer = _load_model(model_path)
+        # Load model once at startup (only for local mode)
+        if config.CLASSIFIER_MODE == "local":
+            model, tokenizer = _load_model(model_path)
+            logger.info(f"✅ LOCAL model ready: {model_path}")
+        elif config.CLASSIFIER_MODE == "cloud":
+            model, tokenizer = None, None
+            logger.info(f"✅ CLOUD API ready: {config.QWEN_CLOUD_MODEL}")
+        else:
+            raise ValueError(f"Invalid CLASSIFIER_MODE: {config.CLASSIFIER_MODE}. Must be 'local' or 'cloud'")
+
         logger.info("✅ Worker process ready - waiting for classification requests")
 
         # Process requests in loop
@@ -237,11 +335,12 @@ def worker_process(request_queue: mp.Queue, response_queue: mp.Queue, model_path
                 current_topic = request.get("current_topic")
                 recent_context = request.get("recent_context", [])
                 new_transcript = request.get("new_transcript")
+                existing_segments = request.get("existing_segments", "")
 
                 logger.info(f"📥 Processing request {request_id}: '{new_transcript[:50]}...'")
 
                 # Classify transcript
-                result = _classify(model, tokenizer, current_topic, recent_context, new_transcript)
+                result = _classify(model, tokenizer, current_topic, recent_context, new_transcript, existing_segments)
 
                 # Send response back
                 response = {
@@ -332,7 +431,8 @@ class LLMClassifierClient:
         self,
         current_topic: Optional[str],
         recent_context: list,
-        new_transcript: str
+        new_transcript: str,
+        existing_segments: str = ""
     ) -> Dict[str, str]:
         """
         Classify transcript asynchronously (non-blocking).
@@ -341,6 +441,7 @@ class LLMClassifierClient:
             current_topic: Current segment topic
             recent_context: List of recent transcript texts
             new_transcript: New transcript to classify
+            existing_segments: String list of already created segment topics (for deduplication)
 
         Returns:
             dict: Classification result
@@ -356,7 +457,8 @@ class LLMClassifierClient:
             "id": request_id,
             "current_topic": current_topic,
             "recent_context": recent_context,
-            "new_transcript": new_transcript
+            "new_transcript": new_transcript,
+            "existing_segments": existing_segments
         }
 
         # Send request to worker

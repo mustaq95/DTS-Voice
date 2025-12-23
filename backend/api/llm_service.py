@@ -2,10 +2,10 @@ from openai import OpenAI
 from typing import List, Dict, Any
 import json
 
-from prompts import CLASSIFICATION_PROMPT
+from prompts import NUDGES_PROMPT
 
 
-def classify_transcripts(transcripts: List[str], api_key: str, topic: str | None = None) -> List[Dict[str, Any]]:
+def classify_transcripts(transcripts: List[str], api_key: str, topic: str | None = None, existing_nudges: List[Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
     """
     Classify transcript content using OpenAI
 
@@ -13,6 +13,7 @@ def classify_transcripts(transcripts: List[str], api_key: str, topic: str | None
         transcripts: List of transcript text strings
         api_key: OpenAI API key
         topic: Optional topic/segment name for enhanced context
+        existing_nudges: List of already generated nudges (for deduplication)
 
     Returns:
         List of classified nudges
@@ -26,8 +27,21 @@ def classify_transcripts(transcripts: List[str], api_key: str, topic: str | None
     if topic:
         transcript_text = f"[Topic: {topic}]\n\n{transcript_text}"
 
+    # Format existing nudges for LLM deduplication
+    existing_nudges_str = ""
+    if existing_nudges and len(existing_nudges) > 0:
+        existing_nudges_str = "\n".join([
+            f"- [{n['type']}] {n['title']}"
+            for n in existing_nudges
+        ])
+    else:
+        existing_nudges_str = "None yet"
+
     # Create the prompt
-    prompt = CLASSIFICATION_PROMPT.format(transcripts=transcript_text)
+    prompt = NUDGES_PROMPT.format(
+        transcripts=transcript_text,
+        existing_nudges=existing_nudges_str
+    )
 
     try:
         response = client.chat.completions.create(

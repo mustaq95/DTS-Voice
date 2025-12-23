@@ -150,15 +150,24 @@ class SegmentManager:
             current_topic = self.current_segment.topic if self.current_segment else None
             recent_context = [t.text for t in self.transcript_buffer[-config.SEGMENT_CONTEXT_SIZE:]]
 
-            logger.info(f"📋 Current topic: {current_topic}, Context size: {len(recent_context)}")
+            # Build list of existing segments for deduplication
+            existing_segments_list = [seg.topic for seg in self.segments]
+            if self.current_segment:
+                existing_segments_list.append(f"{self.current_segment.topic} (ACTIVE)")
+            existing_segments = "\n".join([f"- {topic}" for topic in existing_segments_list]) if existing_segments_list else ""
+
+            logger.info(f"📋 Current topic: {current_topic}, Context size: {len(recent_context)}, Existing segments: {len(existing_segments_list)}")
+            logger.info(f"📊 Using {config.CLASSIFIER_MODE.upper()} classifier for segmentation")
             seg_logger.info(f"Current Topic: {current_topic}")
             seg_logger.info(f"Context ({len(recent_context)} transcripts): {recent_context}")
+            seg_logger.info(f"Existing Segments ({len(existing_segments_list)}): {existing_segments_list}")
 
             seg_logger.info("Calling LLM classifier (in separate process)...")
             classification = await self.classifier_client.classify_async(
                 current_topic=current_topic,
                 recent_context=recent_context,
-                new_transcript=transcript.text
+                new_transcript=transcript.text,
+                existing_segments=existing_segments
             )
 
             logger.info(f"✅ Classification result: {classification['action']} → {classification['topic']} ({classification['reason']})")
@@ -186,8 +195,9 @@ class SegmentManager:
 
                 await self._handle_classification(transcript, classification)
 
-            # STEP 3: Publish update (no lock needed)
+            # STEP 3: Publish updates (no lock needed)
             await self._publish_segment_update()
+            await self._publish_segment_active()  # NEW: Publish active segment in real-time
 
         except Exception as e:
             logger.error(f"❌ Error processing transcript: {e}", exc_info=True)
@@ -383,6 +393,28 @@ class SegmentManager:
 
         except Exception as e:
             logger.error(f"Failed to publish noise filtered: {e}", exc_info=True)
+
+    async def _publish_segment_active(self) -> None:
+        """Publish active segment in real-time to LiveKit data channel"""
+        try:
+            if self.current_segment is None:
+                return
+
+            message = {
+                "type": "segment_active",
+                "data": self.current_segment.to_dict()
+            }
+
+            await self.room.local_participant.publish_data(
+                payload=json.dumps(message).encode('utf-8'),
+                reliable=True,
+                topic="segments"
+            )
+
+            logger.debug(f"📡 Published segment_active: '{self.current_segment.topic}' ({len(self.current_segment.transcripts)} messages)")
+
+        except Exception as e:
+            logger.error(f"Failed to publish segment active: {e}", exc_info=True)
 
     def get_state(self) -> Dict:
         """

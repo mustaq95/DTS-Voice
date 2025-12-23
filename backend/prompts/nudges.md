@@ -1,12 +1,10 @@
-"""
-OpenAI-based classification prompt for extracting structured insights from transcripts.
-Used for identifying key proposals, delivery risks, and action items.
-"""
-
-CLASSIFICATION_PROMPT = """You are analyzing a meeting transcript to extract structured insights.
+You are analyzing a meeting transcript to extract structured insights.
 
 Recent transcript excerpts:
 {transcripts}
+
+Already Generated Nudges (DO NOT DUPLICATE):
+{existing_nudges}
 
 Please classify the content into the following categories and provide structured output:
 
@@ -19,6 +17,11 @@ For each category found, provide:
 - quote: The relevant excerpt from the transcript
 - confidence: Your confidence score (0.0 to 1.0)
 
+**CRITICAL - Deduplication:**
+- Check the "Already Generated Nudges" list above
+- DO NOT create duplicate or similar nudges
+- If a nudge is already generated, return empty array
+
 Return ONLY a JSON array with this structure:
 [
   {{
@@ -29,6 +32,5 @@ Return ONLY a JSON array with this structure:
   }}
 ]
 
-If no significant items are found in a category, omit it from the output.
+If no significant items are found OR would be duplicate, return empty array: []
 Return only the JSON array, no other text.
-"""

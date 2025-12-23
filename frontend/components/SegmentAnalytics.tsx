@@ -110,15 +110,15 @@ export default function SegmentAnalytics({ segments }: SegmentAnalyticsProps) {
                     : 0;
 
                 return (
-                  <div key={topic}>
-                    <div className="flex items-center justify-between text-xs mb-1">
+                  <div key={topic} className="min-w-0">
+                    <div className="flex items-center justify-between text-xs mb-1 gap-2">
                       <span
-                        className="font-medium truncate max-w-[60%]"
+                        className="font-medium truncate flex-1 min-w-0"
                         style={{ color }}
                       >
                         {topic}
                       </span>
-                      <span className="text-[var(--text-tertiary)]">
+                      <span className="text-[var(--text-tertiary)] flex-shrink-0">
                         {count} ({percentage}%)
                       </span>
                     </div>
@@ -156,12 +156,12 @@ export default function SegmentAnalytics({ segments }: SegmentAnalyticsProps) {
                     maxDuration > 0 ? (duration / maxDuration) * 100 : 0;
 
                   return (
-                    <div key={segment.id}>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-[var(--text-secondary)] truncate max-w-[60%]">
+                    <div key={segment.id} className="min-w-0">
+                      <div className="flex items-center justify-between text-xs mb-1 gap-2">
+                        <span className="text-[var(--text-secondary)] truncate flex-1 min-w-0">
                           {segment.topic}
                         </span>
-                        <span className="text-[var(--text-tertiary)]">
+                        <span className="text-[var(--text-tertiary)] flex-shrink-0">
                           {duration.toFixed(1)}m
                         </span>
                       </div>

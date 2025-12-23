@@ -27,9 +27,20 @@ AUDIO_VALIDATION_RMS_THRESHOLD_DB = float(os.getenv("AUDIO_VALIDATION_RMS_THRESH
 
 # Segmentation settings
 CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
-SEGMENT_MIN_WORDS = int(os.getenv("SEGMENT_MIN_WORDS", "20"))  # Min words before topic change allowed
+SEGMENT_MIN_WORDS = int(os.getenv("SEGMENT_MIN_WORDS", "5"))  # Min words before topic change allowed (lowered for real-time UX)
 SEGMENT_MAX_WORDS = int(os.getenv("SEGMENT_MAX_WORDS", "500"))  # Force new segment if exceeded
 SEGMENT_CONTEXT_SIZE = int(os.getenv("SEGMENT_CONTEXT_SIZE", "5"))  # Recent transcripts for LLM context
+
+# Classifier mode selection
+CLASSIFIER_MODE = os.getenv("CLASSIFIER_MODE", "local")  # "local" (MLX-LM) or "cloud" (Qwen API)
+
+# Qwen Cloud API settings (for cloud mode)
+QWEN_CLOUD_API_URL = os.getenv("QWEN_CLOUD_API_URL", "https://beta.govgpt.gov.ae/llm/qwen3instruct/chat/completions")
+QWEN_CLOUD_API_KEY = os.getenv("QWEN_CLOUD_API_KEY", "")
+QWEN_CLOUD_MODEL = os.getenv("QWEN_CLOUD_MODEL", "Qwen/Qwen3-Next-80B-A3B-Instruct")
+
+# Nudge settings
+NUDGE_CONTEXT_SIZE = int(os.getenv("NUDGE_CONTEXT_SIZE", "10"))  # Number of recent transcripts to send for nudge classification
 
 # Storage settings
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")

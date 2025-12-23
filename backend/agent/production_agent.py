@@ -56,6 +56,10 @@ segment_managers = {}
 # Global state: Current transcription engine per room
 room_transcription_engines = {}  # {"room_name": "mlx_whisper" | "hamza"}
 
+# Global state: Nudge context buffer and generated nudges per room
+nudge_context_buffer = {}  # {"room_name": [last 10 transcripts]}
+generated_nudges = {}  # {"room_name": [all generated nudges]}
+
 
 def format_timestamp() -> str:
     """Format current time as HH:MM:SS"""
@@ -221,6 +225,45 @@ async def _close_hamza_on_switch(room_name: str):
             logger.info("✅ Hamza WebSocket closed")
     except Exception as e:
         logger.error(f"Error closing Hamza: {e}")
+
+
+async def check_nudges_async(context: list, existing_nudges: list, room: rtc.Room, participant: str):
+    """Check for nudges using existing llm_service (non-blocking)."""
+    try:
+        from api import llm_service
+
+        logger.info(f"🔍 Checking nudges for room {room.name} with {len(context)} transcripts")
+
+        # Call existing classify_transcripts function
+        nudges = llm_service.classify_transcripts(
+            transcripts=context,  # Last 10 transcripts
+            api_key=config.OPENAI_API_KEY,
+            topic=None,  # No topic needed for transcript-level
+            existing_nudges=existing_nudges  # For deduplication
+        )
+
+        # If LLM returned new nudges, publish and track them
+        if nudges and len(nudges) > 0:
+            for nudge in nudges:
+                # Add to history
+                generated_nudges[room.name].append(nudge)
+
+                # Publish to frontend via LiveKit data channel
+                message = {
+                    "type": "nudge",
+                    "data": nudge
+                }
+                await room.local_participant.publish_data(
+                    payload=json.dumps(message).encode('utf-8'),
+                    reliable=True,
+                    topic="nudges"
+                )
+                logger.info(f"📌 Published nudge: {nudge['title']}")
+        else:
+            logger.debug(f"No new nudges generated (context: {len(context)} transcripts)")
+
+    except Exception as e:
+        logger.error(f"Error checking nudges: {e}", exc_info=True)
 
 
 async def transcribe_and_publish(
@@ -402,6 +445,26 @@ async def transcribe_and_publish(
                 speaker=participant_identity
             )
             logger.info("✅ Transcript added to SegmentManager")
+
+        # Initialize nudge buffers for this room if needed
+        if room.name not in nudge_context_buffer:
+            nudge_context_buffer[room.name] = []
+            generated_nudges[room.name] = []
+
+        # Add transcript to nudge context buffer
+        nudge_context_buffer[room.name].append(text)
+        if len(nudge_context_buffer[room.name]) > config.NUDGE_CONTEXT_SIZE:
+            nudge_context_buffer[room.name].pop(0)
+
+        # Check for nudges (non-blocking, every transcript)
+        asyncio.create_task(
+            check_nudges_async(
+                context=nudge_context_buffer[room.name].copy(),
+                existing_nudges=generated_nudges[room.name].copy(),
+                room=room,
+                participant=participant_identity
+            )
+        )
 
     except Exception as e:
         logger.error(f"Error in transcribe_and_publish: {e}", exc_info=True)

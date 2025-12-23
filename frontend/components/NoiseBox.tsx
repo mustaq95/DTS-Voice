@@ -20,13 +20,15 @@ function formatTimestamp(isoString: string): string {
 
 export default function NoiseBox({ noiseItems }: NoiseBoxProps) {
   return (
-    <div className="glass rounded-2xl p-5 max-h-[200px] flex flex-col">
-      <div className="flex items-center gap-2 mb-4 flex-shrink-0">
-        <AlertCircle size={18} className="text-[var(--color-warning)]" />
-        <h2 className="text-lg font-semibold">Filtered Noise</h2>
-        <span className="text-xs text-[var(--text-tertiary)] ml-auto">
-          {noiseItems.length} {noiseItems.length === 1 ? 'item' : 'items'}
-        </span>
+    <div className="glass rounded-2xl p-5 max-h-[200px] flex-shrink-0 flex flex-col">
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <AlertCircle size={18} className="text-[var(--color-warning)]" />
+          <h2 className="text-lg font-semibold">Filtered Noise</h2>
+          <span className="px-2 py-0.5 rounded-full bg-[var(--color-warning)] bg-opacity-20 text-[var(--color-warning)] text-xs font-medium">
+            {noiseItems.length}
+          </span>
+        </div>
       </div>
 
       {noiseItems.length === 0 ? (

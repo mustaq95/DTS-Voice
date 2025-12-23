@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Mic, MicOff, Download, PhoneOff } from 'lucide-react';
 import LiveTranscript from '../components/LiveTranscript';
 import SegmentTimeline from '../components/SegmentTimeline';
 import SegmentAnalytics from '../components/SegmentAnalytics';
@@ -11,6 +11,8 @@ import NudgesPanel from '../components/NudgesPanel';
 import MeetingControls from '../components/MeetingControls';
 import LiveIndicator from '../components/LiveIndicator';
 import NoiseBox from '../components/NoiseBox';
+import ClassificationStatus from '../components/ClassificationStatus';
+import ModelToggle from '../components/ModelToggle';
 import { useLiveKit } from '../hooks/useLiveKit';
 import { Nudge } from '../lib/types';
 import { pageTransition, buttonTap } from '../lib/animations';
@@ -18,7 +20,6 @@ import { pageTransition, buttonTap } from '../lib/animations';
 export default function Home() {
   const [currentTime, setCurrentTime] = useState('');
   const [participantName] = useState(`user-${Math.random().toString(36).substring(7)}`);
-  const [nudges, setNudges] = useState<Nudge[]>([]);
 
   // LiveKit connection
   const {
@@ -29,6 +30,7 @@ export default function Home() {
     segments,
     segmentUpdate,
     noiseItems,
+    nudges,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,
@@ -39,55 +41,8 @@ export default function Home() {
     participantName,
   });
 
-  // Function to request nudges from API for a specific segment
-  const requestNudgesForSegment = useCallback(async (segment: any) => {
-    // Extract transcript text from segment
-    const segmentTranscripts = segment.transcripts.map((t: any) => t.text);
-
-    if (segmentTranscripts.length === 0) return;
-
-    try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      console.log(`📊 Requesting nudges for segment "${segment.topic}" (${segmentTranscripts.length} transcripts)`);
-
-      const response = await fetch(`${apiUrl}/nudge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          transcripts: segmentTranscripts,
-          segment_id: segment.id,
-          topic: segment.topic,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.nudges) {
-        console.log(`✅ Received ${data.nudges.length} nudges for segment "${segment.topic}"`);
-        setNudges((prev) => [...prev, ...data.nudges]);
-      }
-    } catch (error) {
-      console.error('Error requesting nudges:', error);
-    }
-  }, []);
-
-  // Auto-request nudges when a segment is completed
-  useEffect(() => {
-    const completedSegments = segments.filter((s) => s.status === 'completed');
-    const lastSegment = completedSegments[completedSegments.length - 1];
-
-    if (lastSegment) {
-      // Check if we've already processed this segment
-      const segmentId = lastSegment.id;
-      const alreadyProcessed = nudges.some((n: any) => n.segment_id === segmentId);
-
-      if (!alreadyProcessed) {
-        console.log(`🎯 New completed segment detected: "${lastSegment.topic}" (ID: ${segmentId})`);
-        requestNudgesForSegment(lastSegment);
-      }
-    }
-  }, [segments, nudges, requestNudgesForSegment]);
+  // Nudges are now received in real-time via LiveKit data channel
+  // No need for API polling - nudges come from useLiveKit hook
 
   // Auto-connect to LiveKit room on mount
   useEffect(() => {
@@ -278,38 +233,120 @@ export default function Home() {
 
       {/* Main Content - 3 Column Layout */}
       <div className="flex-1 flex gap-5 p-5 overflow-hidden min-h-0">
-        {/* Left Column: Segment Timeline + Noise Box */}
-        <div className="w-80 flex-shrink-0 flex flex-col gap-5 overflow-y-auto">
+        {/* Left Column: Segment Timeline + Classification Status + Noise Box */}
+        <div className="w-80 min-w-80 flex-shrink-0 flex flex-col gap-5 overflow-y-auto">
           <SegmentTimeline
             segments={segments}
             currentSegment={segmentUpdate}
             transcripts={transcripts}
           />
+
+          {/* Classification Status Indicator */}
+          {segmentUpdate && (
+            <ClassificationStatus segmentUpdate={segmentUpdate} />
+          )}
+
           <NoiseBox noiseItems={noiseItems} />
         </div>
 
         {/* Center Column: Live Transcript (Main Focus) */}
-        <div className="flex-1 min-w-0 flex">
+        <div className="flex-1 min-w-0 flex overflow-hidden">
           <LiveTranscript transcripts={transcripts} segments={segments} />
         </div>
 
         {/* Right Column: Analytics & Nudges */}
-        <div className="w-96 flex-shrink-0 flex flex-col gap-6 overflow-y-auto">
+        <div className="w-96 min-w-96 flex-shrink-0 flex flex-col gap-6 overflow-y-auto">
           <SegmentAnalytics segments={segments} />
           <NudgesPanel nudges={nudges} />
         </div>
       </div>
 
-      {/* Controls */}
-      <MeetingControls
-        micOn={isMicEnabled}
-        isConnected={isConnected}
-        onMicToggle={handleMicToggle}
-        onExport={handleExport}
-        onEndMeeting={handleEndMeeting}
-        transcriptCount={transcripts.length}
-        segmentCount={segments.length}
-      />
+      {/* Controls - Bottom Bar with Model Toggle in Center */}
+      <div className="glass-dark px-6 py-4">
+        <div className="flex justify-between items-center">
+          {/* Left: Status and Stats */}
+          <div className="flex items-center gap-6">
+            {isConnected && isMicEnabled && <LiveIndicator size="sm" label="RECORDING" />}
+            {isConnected && !isMicEnabled && (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-[var(--color-warning)]" />
+                <span className="text-sm font-semibold text-[var(--color-warning)] uppercase tracking-wide">
+                  PAUSED
+                </span>
+              </div>
+            )}
+            {!isConnected && (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-[var(--text-tertiary)]" />
+                <span className="text-sm font-semibold text-[var(--text-tertiary)] uppercase tracking-wide">
+                  DISCONNECTED
+                </span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-4 text-sm text-[var(--text-tertiary)]">
+              <div>
+                <span className="font-semibold text-[var(--text-secondary)]">
+                  {transcripts.length}
+                </span>{' '}
+                messages
+              </div>
+              <div className="w-1 h-1 rounded-full bg-[var(--text-tertiary)]" />
+              <div>
+                <span className="font-semibold text-[var(--text-secondary)]">
+                  {segments.length}
+                </span>{' '}
+                segments
+              </div>
+            </div>
+          </div>
+
+          {/* Center: Model Toggle */}
+          <div className="absolute left-1/2 -translate-x-1/2">
+            <ModelToggle roomName="voice-fest" disabled={!isConnected} />
+          </div>
+
+          {/* Right: Action Buttons */}
+          <div className="flex gap-3">
+            {/* Microphone Toggle */}
+            <motion.button
+              whileTap={buttonTap}
+              onClick={handleMicToggle}
+              disabled={!isConnected}
+              className={`flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition-all ${
+                isMicEnabled
+                  ? 'bg-[var(--color-live)] hover:bg-red-600 text-white shadow-lg'
+                  : 'glass hover:bg-[var(--color-surface)] text-[var(--text-primary)]'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              {isMicEnabled ? <Mic size={18} /> : <MicOff size={18} />}
+              <span className="text-sm">{isMicEnabled ? 'Mic On' : 'Mic Off'}</span>
+            </motion.button>
+
+            {/* Export Button */}
+            <motion.button
+              whileTap={buttonTap}
+              onClick={handleExport}
+              disabled={transcripts.length === 0}
+              className="glass hover:bg-[var(--color-surface)] text-[var(--text-primary)] flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download size={18} />
+              <span className="text-sm">Export</span>
+            </motion.button>
+
+            {/* End Meeting Button */}
+            <motion.button
+              whileTap={buttonTap}
+              onClick={handleEndMeeting}
+              disabled={!isConnected}
+              className="bg-[var(--color-live)] hover:bg-red-600 text-white flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+            >
+              <PhoneOff size={18} />
+              <span className="text-sm">End</span>
+            </motion.button>
+          </div>
+        </div>
+      </div>
     </motion.div>
   );
 }

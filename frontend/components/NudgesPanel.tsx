@@ -51,8 +51,16 @@ function NudgeCard({ nudge }: { nudge: Nudge }) {
   return (
     <motion.div
       {...fadeInUp}
-      className="glass-dark rounded-xl p-4 border-l-4 hover:bg-[var(--color-surface)] transition-all hover:scale-[1.02]"
+      className="glass-dark rounded-xl p-4 border-l-4"
       style={{ borderLeftColor: typeInfo.color }}
+      whileHover={{
+        y: -2,
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+        transition: {
+          duration: 0.2,
+          ease: 'easeOut',
+        },
+      }}
     >
       <div className="flex items-start gap-3">
         <div

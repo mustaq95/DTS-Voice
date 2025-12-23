@@ -86,7 +86,7 @@ export default function LiveTranscript({ transcripts, segments }: LiveTranscript
   }
 
   return (
-    <div className="flex-1 glass rounded-2xl flex flex-col h-full">
+    <div className="relative flex-1 glass rounded-2xl flex flex-col h-full">
       {/* Header */}
       <div className="p-5 pb-4 border-b border-[var(--border-primary)] flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
@@ -119,7 +119,7 @@ export default function LiveTranscript({ transcripts, segments }: LiveTranscript
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-5 space-y-4"
+        className="flex-1 overflow-y-auto p-5 space-y-4 min-w-0"
       >
         {filteredTranscripts.length === 0 && !searchQuery && (
           <div className="flex flex-col items-center justify-center h-full text-center">

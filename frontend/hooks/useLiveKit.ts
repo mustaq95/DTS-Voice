@@ -9,7 +9,7 @@ import {
   DataPacket_Kind,
   RemoteParticipant,
 } from 'livekit-client';
-import { Transcript, Segment, SegmentUpdate, NoiseItem } from '../lib/types';
+import { Transcript, Segment, SegmentUpdate, NoiseItem, Nudge } from '../lib/types';
 
 interface UseLiveKitProps {
   roomName: string;
@@ -26,6 +26,7 @@ interface UseLiveKitReturn {
   segments: Segment[];
   segmentUpdate: SegmentUpdate | null;
   noiseItems: NoiseItem[];
+  nudges: Nudge[];
   connectToRoom: () => Promise<void>;
   disconnectFromRoom: () => Promise<void>;
   enableMicrophone: () => Promise<void>;
@@ -47,6 +48,7 @@ export function useLiveKit({
   const [segments, setSegments] = useState<Segment[]>([]);
   const [segmentUpdate, setSegmentUpdate] = useState<SegmentUpdate | null>(null);
   const [noiseItems, setNoiseItems] = useState<NoiseItem[]>([]);
+  const [nudges, setNudges] = useState<Nudge[]>([]);
 
   const connectToRoom = useCallback(async () => {
     if (room && room.state === 'connected') {
@@ -114,14 +116,32 @@ export function useLiveKit({
           } else if (message.type === 'buffer_update') {
             console.log('📊 Segment buffer updated:', message.data);
             setSegmentUpdate(message.data);
+          } else if (message.type === 'segment_active') {
+            console.log('🔄 Active segment updated:', message.data);
+            setSegments((prev) => {
+              // Update or add active segment
+              const exists = prev.findIndex((s) => s.id === message.data.id);
+              if (exists !== -1) {
+                // Update existing active segment
+                const updated = [...prev];
+                updated[exists] = { ...message.data, status: 'active' };
+                return updated;
+              }
+              // Add new active segment
+              return [...prev, { ...message.data, status: 'active' }];
+            });
           } else if (message.type === 'segment_complete') {
             console.log('✅ Segment completed:', message.data);
             setSegments((prev) => {
-              // Check if segment already exists (prevent duplicates)
-              const exists = prev.some((s) => s.id === message.data.id);
-              if (exists) {
-                return prev;
+              // Update existing segment to completed status
+              const exists = prev.findIndex((s) => s.id === message.data.id);
+              if (exists !== -1) {
+                // Update existing segment to completed
+                const updated = [...prev];
+                updated[exists] = { ...message.data, status: 'completed' };
+                return updated;
               }
+              // Add new completed segment (fallback)
               return [...prev, { ...message.data, status: 'completed' }];
             });
           } else if (message.type === 'noise_filtered') {
@@ -133,6 +153,9 @@ export function useLiveKit({
               filtered_at: new Date().toISOString()
             };
             setNoiseItems((prev) => [...prev, noiseItem]);
+          } else if (message.type === 'nudge') {
+            console.log('📌 Nudge received:', message.data);
+            setNudges((prev) => [...prev, message.data]);
           } else {
             console.log('❌ Message type not recognized or no data:', message);
           }
@@ -256,6 +279,7 @@ export function useLiveKit({
     segments,
     segmentUpdate,
     noiseItems,
+    nudges,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,
