@@ -111,6 +111,10 @@ STARTUP.md
 # Debug scripts
 backend/debug_*.py
 
+# Test scripts
+test_*.py
+backend/test_*.py
+
 # Data directories (runtime generated)
 data/debug/
 data/meetings/*/
