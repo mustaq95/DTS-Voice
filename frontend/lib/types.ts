@@ -56,7 +56,14 @@ export interface MeetingSession {
   segments?: Segment[];
 }
 
+export interface EngineStatus {
+  engine: 'mlx_whisper' | 'hamza';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting';
+  error?: string;
+  timestamp: string;
+}
+
 export interface WebSocketMessage {
-  type: 'transcript' | 'nudge' | 'status' | 'segment_complete' | 'buffer_update' | 'noise_filtered';
-  data: Transcript | Nudge | Segment | SegmentUpdate | NoiseItem | unknown;
+  type: 'transcript' | 'nudge' | 'status' | 'segment_complete' | 'buffer_update' | 'noise_filtered' | 'engine_status';
+  data: Transcript | Nudge | Segment | SegmentUpdate | NoiseItem | EngineStatus | unknown;
 }

@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, Any
 from dotenv import load_dotenv
 from livekit import rtc
+from livekit.rtc import Room
 from livekit.agents import (
     JobContext,
     JobProcess,
@@ -145,11 +146,15 @@ async def process_audio_with_vad(
                     logger.info(f"✋ Speech ended: {participant_identity}, processing {len(event.frames)} frames")
 
                     if event.frames:
+                        # Capture speech end time NOW (before async transcription)
+                        speech_end_time = datetime.now()
+
                         task = asyncio.create_task(
                             transcribe_and_publish(
                                 event.frames,
                                 participant_identity,
-                                room
+                                room,
+                                speech_end_time
                             )
                         )
                         transcription_tasks.append(task)
@@ -172,7 +177,7 @@ async def process_audio_with_vad(
     )
 
 
-def on_data_received(data_packet: rtc.DataPacket):
+def on_data_received(data_packet: rtc.DataPacket, room: Room):
     """Handle incoming data messages (model switch commands)."""
     try:
         sender_id = data_packet.participant.identity if data_packet.participant else 'unknown'
@@ -194,9 +199,13 @@ def on_data_received(data_packet: rtc.DataPacket):
 
                 if previous_model == "hamza" and new_model != "hamza":
                     asyncio.create_task(_close_hamza_on_switch(room_name))
+                    # Send mlx_whisper connected status
+                    asyncio.create_task(_send_engine_status(room, "mlx_whisper", "connected"))
 
                 if new_model == "hamza":
-                    asyncio.create_task(_init_hamza_client())
+                    asyncio.create_task(_init_hamza_client(room))
+                elif new_model == "mlx_whisper":
+                    asyncio.create_task(_send_engine_status(room, "mlx_whisper", "connected"))
 
     except json.JSONDecodeError as e:
         logger.warning(f"Non-JSON data packet: {e}")
@@ -204,16 +213,49 @@ def on_data_received(data_packet: rtc.DataPacket):
         logger.error(f"Error handling data packet: {e}", exc_info=True)
 
 
-async def _init_hamza_client():
+async def _send_engine_status(room: Room, engine: str, status: str, error: str = None):
+    """Send engine status update to frontend via LiveKit data channel."""
+    try:
+        from datetime import datetime, timezone
+        status_message = {
+            "type": "engine_status",
+            "data": {
+                "engine": engine,
+                "status": status,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        if error:
+            status_message["data"]["error"] = error
+
+        await room.local_participant.publish_data(
+            json.dumps(status_message).encode('utf-8'),
+            reliable=True
+        )
+        logger.debug(f"📤 Sent engine status: {engine} - {status}")
+    except Exception as e:
+        logger.error(f"Failed to send engine status: {e}")
+
+
+async def _init_hamza_client(room: Room = None):
     """Initialize Hamza client in background."""
     try:
+        if room:
+            await _send_engine_status(room, "hamza", "connecting")
+
         client = await get_hamza_client()
-        if client:
+        if client and client.is_connected:
             logger.info("✅ Hamza WebSocket ready")
+            if room:
+                await _send_engine_status(room, "hamza", "connected")
         else:
             logger.error("❌ Failed to initialize Hamza")
+            if room:
+                await _send_engine_status(room, "hamza", "error", "Connection failed")
     except Exception as e:
         logger.error(f"❌ Hamza initialization failed: {e}")
+        if room:
+            await _send_engine_status(room, "hamza", "error", str(e))
 
 
 async def _close_hamza_on_switch(room_name: str):
@@ -269,9 +311,17 @@ async def check_nudges_async(context: list, existing_nudges: list, room: rtc.Roo
 async def transcribe_and_publish(
     audio_frames: list,
     participant_identity: str,
-    room: rtc.Room
+    room: rtc.Room,
+    speech_end_time: datetime
 ):
-    """Transcribe speech segment and publish to room."""
+    """Transcribe speech segment and publish to room.
+
+    Args:
+        audio_frames: Audio frames to transcribe
+        participant_identity: Speaker identity
+        room: LiveKit room
+        speech_end_time: When speech actually ended (not when transcription completes)
+    """
     if not audio_frames:
         logger.debug("No audio frames, skipping")
         return
@@ -330,10 +380,11 @@ async def transcribe_and_publish(
 
         # Create callback for real-time partial transcripts (Hamza only)
         async def publish_partial_transcript(text: str, is_final: bool = False):
-            """Publish partial transcript to UI in real-time"""
+            """Publish partial transcript to UI in real-time and add to segment manager"""
             nonlocal published_final_via_callback
             try:
-                timestamp = format_timestamp()
+                # Use speech end time (when person stopped talking), not current time
+                timestamp = speech_end_time.strftime("%H:%M:%S")
                 partial_transcript = {
                     "timestamp": timestamp,
                     "speaker": participant_identity,
@@ -350,6 +401,16 @@ async def transcribe_and_publish(
                     topic="transcription"
                 )
                 logger.debug(f"Published partial transcript: {text}...")
+
+                # Add to segment manager (real-time segmentation)
+                if room.name in segment_managers:
+                    manager = segment_managers[room.name]
+                    manager.add_transcript(
+                        timestamp=timestamp,
+                        text=text,
+                        speaker=participant_identity
+                    )
+                    logger.debug(f"✅ Partial transcript added to SegmentManager")
 
                 # Track if we published final
                 if is_final:
@@ -411,7 +472,8 @@ async def transcribe_and_publish(
                 logger.warning(f"⚠️ Hallucination: contains '{phrase}'")
                 return
 
-        timestamp = format_timestamp()
+        # Use speech end time (when person stopped talking), not current time
+        timestamp = speech_end_time.strftime("%H:%M:%S")
         logger.info(f"[{timestamp}] {participant_identity}: {text}")
 
         # Publish transcript (skip for Hamza - callback handles all publishes)
@@ -436,15 +498,18 @@ async def transcribe_and_publish(
             )
             logger.info("Published transcript to room")
 
-        # Add to segment manager
-        if room.name in segment_managers:
-            manager = segment_managers[room.name]
-            manager.add_transcript(
-                timestamp=timestamp,
-                text=text,
-                speaker=participant_identity
-            )
-            logger.info("✅ Transcript added to SegmentManager")
+        # Add to segment manager (skip for Hamza - callback handles it)
+        if current_engine == "hamza":
+            logger.debug("Skipping segment manager add for Hamza (callback handles it)")
+        else:
+            if room.name in segment_managers:
+                manager = segment_managers[room.name]
+                manager.add_transcript(
+                    timestamp=timestamp,
+                    text=text,
+                    speaker=participant_identity
+                )
+                logger.info("✅ Transcript added to SegmentManager")
 
         # Initialize nudge buffers for this room if needed
         if room.name not in nudge_context_buffer:
@@ -485,7 +550,7 @@ def prewarm(proc: JobProcess):
         min_speech_duration=0.25,
         min_silence_duration=1.2,
         prefix_padding_duration=1.0,
-        max_buffered_speech=60.0,
+        max_buffered_speech=300.0,  # 5 minutes for long speeches/presentations
         sample_rate=16000
     )
     logger.info("✅ VAD loaded")
@@ -540,14 +605,21 @@ async def entrypoint(ctx: JobContext):
     # Pre-initialize Hamza if needed
     if config.TRANSCRIPTION_ENGINE == "hamza":
         logger.info("🔧 Pre-initializing Hamza...")
+        await _send_engine_status(room, "hamza", "connecting")
         try:
             client = await get_hamza_client()
-            if client:
+            if client and client.is_connected:
                 logger.info("✅ Hamza ready")
+                await _send_engine_status(room, "hamza", "connected")
             else:
                 logger.error("❌ Hamza initialization failed")
+                await _send_engine_status(room, "hamza", "error", "Connection failed")
         except Exception as e:
             logger.error(f"❌ Hamza error: {e}")
+            await _send_engine_status(room, "hamza", "error", str(e))
+    else:
+        # Send mlx_whisper connected status
+        await _send_engine_status(room, "mlx_whisper", "connected")
 
     participant_tasks = {}
     shutdown_event = asyncio.Event()
@@ -582,7 +654,11 @@ async def entrypoint(ctx: JobContext):
             logger.info("🔌 Room disconnected")
             shutdown_event.set()
 
-        room.on("data_received", on_data_received)
+        # Create closure to capture room for data handler
+        def on_data_received_with_room(data_packet: rtc.DataPacket):
+            on_data_received(data_packet, room)
+
+        room.on("data_received", on_data_received_with_room)
         logger.info("✅ Agent ready!")
 
         await shutdown_event.wait()

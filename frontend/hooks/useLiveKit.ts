@@ -9,7 +9,7 @@ import {
   DataPacket_Kind,
   RemoteParticipant,
 } from 'livekit-client';
-import { Transcript, Segment, SegmentUpdate, NoiseItem, Nudge } from '../lib/types';
+import { Transcript, Segment, SegmentUpdate, NoiseItem, Nudge, EngineStatus } from '../lib/types';
 
 interface UseLiveKitProps {
   roomName: string;
@@ -27,6 +27,7 @@ interface UseLiveKitReturn {
   segmentUpdate: SegmentUpdate | null;
   noiseItems: NoiseItem[];
   nudges: Nudge[];
+  engineStatus: EngineStatus | null;
   connectToRoom: () => Promise<void>;
   disconnectFromRoom: () => Promise<void>;
   enableMicrophone: () => Promise<void>;
@@ -49,6 +50,7 @@ export function useLiveKit({
   const [segmentUpdate, setSegmentUpdate] = useState<SegmentUpdate | null>(null);
   const [noiseItems, setNoiseItems] = useState<NoiseItem[]>([]);
   const [nudges, setNudges] = useState<Nudge[]>([]);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
 
   const connectToRoom = useCallback(async () => {
     if (room && room.state === 'connected') {
@@ -156,6 +158,9 @@ export function useLiveKit({
           } else if (message.type === 'nudge') {
             console.log('📌 Nudge received:', message.data);
             setNudges((prev) => [...prev, message.data]);
+          } else if (message.type === 'engine_status') {
+            console.log('🔧 Engine status received:', message.data);
+            setEngineStatus(message.data as EngineStatus);
           } else {
             console.log('❌ Message type not recognized or no data:', message);
           }
@@ -280,6 +285,7 @@ export function useLiveKit({
     segmentUpdate,
     noiseItems,
     nudges,
+    engineStatus,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,

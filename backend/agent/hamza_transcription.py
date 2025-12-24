@@ -67,15 +67,17 @@ class HamzaClient:
             data = json.loads(msg)
 
             if data.get("type") == "handshake_ack":
-                logger.info("✅ Hamza connected")
+                logger.info("✅ Hamza connected and handshake successful")
                 self.is_connected = True
                 return True
-            
+
             logger.error(f"❌ Handshake failed: {data}")
+            self.is_connected = False
             return False
 
         except Exception as e:
             logger.error(f"❌ Connection failed: {e}")
+            self.is_connected = False
             return False
 
     async def transcribe(self, audio_data: np.ndarray, on_partial_result=None) -> Dict[str, Any]:

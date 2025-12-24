@@ -31,6 +31,7 @@ export default function Home() {
     segmentUpdate,
     noiseItems,
     nudges,
+    engineStatus,
     connectToRoom,
     disconnectFromRoom,
     enableMicrophone,
@@ -63,6 +64,19 @@ export default function Home() {
       toast.success('Connected to room');
     }
   }, [isConnected]);
+
+  // Show engine status toasts
+  useEffect(() => {
+    if (engineStatus) {
+      if (engineStatus.status === 'error') {
+        const engineName = engineStatus.engine === 'hamza' ? 'Hamza STT' : 'Whisper';
+        toast.error(`${engineName} connection failed: ${engineStatus.error || 'Unknown error'}`);
+      } else if (engineStatus.status === 'connected') {
+        const engineName = engineStatus.engine === 'hamza' ? 'Hamza STT' : 'Whisper';
+        toast.success(`${engineName} connected`);
+      }
+    }
+  }, [engineStatus]);
 
   // Update time display on client side
   useEffect(() => {
@@ -213,6 +227,14 @@ export default function Home() {
               />
               <span className="text-[var(--text-secondary)]">
                 {isConnecting ? 'Connecting...' : isConnected ? 'Connected' : 'Disconnected'}
+                {engineStatus && isConnected && (
+                  <span className="text-xs ml-1">
+                    ({engineStatus.engine === 'hamza' ? 'Hamza' : 'Whisper'}:{' '}
+                    <span className={engineStatus.status === 'error' ? 'text-[var(--color-live)]' : 'text-[var(--color-success)]'}>
+                      {engineStatus.status === 'error' ? 'Error' : engineStatus.status === 'connecting' ? 'Connecting' : 'OK'}
+                    </span>)
+                  </span>
+                )}
               </span>
             </div>
             <span className="text-[var(--text-tertiary)]">{currentTime}</span>
