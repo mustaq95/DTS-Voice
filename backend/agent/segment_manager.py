@@ -122,6 +122,9 @@ class SegmentManager:
         # Add to waiting list before classification
         self.waiting_transcripts.append(transcript)
 
+        # Publish buffer update immediately to show pending status in UI
+        asyncio.create_task(self._publish_segment_update())
+
         # Spawn background task (non-blocking)
         task = asyncio.create_task(self._process_transcript(transcript))
         self._tasks.append(task)

@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { motion } from 'framer-motion';
 import { User } from 'lucide-react';
 import { Transcript } from '../lib/types';
@@ -30,7 +31,7 @@ function getSpeakerColor(speaker: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-export default function TranscriptMessage({
+const TranscriptMessage = React.memo(function TranscriptMessage({
   transcript,
   showAvatar = true,
 }: TranscriptMessageProps) {
@@ -81,4 +82,6 @@ export default function TranscriptMessage({
       </div>
     </motion.div>
   );
-}
+});
+
+export default TranscriptMessage;

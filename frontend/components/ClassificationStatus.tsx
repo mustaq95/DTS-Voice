@@ -65,7 +65,7 @@ export default function ClassificationStatus({ segmentUpdate }: ClassificationSt
           </div>
 
           {/* Pending transcripts badge */}
-          {transcripts_in_buffer !== undefined && transcripts_in_buffer > 0 && (
+          {transcripts_in_buffer !== undefined && (
             <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-medium flex items-center gap-1">
               <Clock size={10} />
               {transcripts_in_buffer} pending
