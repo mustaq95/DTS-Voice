@@ -390,6 +390,7 @@ class LLMClassifierClient:
         self.process = None
         self.request_counter = 0
         self.pending_requests = {}  # Map request_id -> callback
+        self.pending_responses = {}  # Cache for out-of-order responses
 
         logger.info(f"🔧 Initializing LLM Classifier Client with model: {model_path}")
 
@@ -467,6 +468,12 @@ class LLMClassifierClient:
 
         # Poll for response (non-blocking)
         while True:
+            # Check if response is already cached (arrived out of order)
+            if request_id in self.pending_responses:
+                response = self.pending_responses.pop(request_id)
+                logger.info(f"📥 Received response {request_id} (from cache)")
+                return response["result"]
+
             try:
                 response = self.response_queue.get_nowait()
 
@@ -475,9 +482,9 @@ class LLMClassifierClient:
                     logger.info(f"📥 Received response {request_id}")
                     return response["result"]
                 else:
-                    # Different response - put it back and continue
-                    # This shouldn't happen with proper queue ordering, but handle it
-                    logger.warning(f"Received unexpected response ID: {response['id']}, expected {request_id}")
+                    # Different response - cache it for the request that's waiting for it
+                    logger.warning(f"Received unexpected response ID: {response['id']}, expected {request_id} - caching for later")
+                    self.pending_responses[response["id"]] = response
 
             except Empty:
                 # No response yet - yield control and try again
