@@ -11,6 +11,11 @@ interface TranscriptMessageProps {
   showAvatar?: boolean;
 }
 
+// Strip milliseconds from timestamp for display (e.g., "19:01:43.123" → "19:01:43")
+function formatTime(timestamp: string): string {
+  return timestamp.split('.')[0];
+}
+
 // Generate consistent color for speaker based on name
 function getSpeakerColor(speaker: string): string {
   const colors = [
@@ -64,7 +69,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
             {transcript.speaker}
           </span>
           <span className="text-xs text-[var(--text-tertiary)]">
-            {transcript.timestamp}
+            {formatTime(transcript.timestamp)}
           </span>
           {isInterim && (
             <motion.span

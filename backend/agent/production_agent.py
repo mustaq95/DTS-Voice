@@ -448,7 +448,7 @@ async def transcribe_and_publish(
             nonlocal published_final_via_callback
             try:
                 # Use speech end time (when person stopped talking), not current time
-                timestamp = speech_end_time.strftime("%H:%M:%S")
+                timestamp = speech_end_time.strftime("%H:%M:%S.%f")[:-3]  # Include milliseconds for correct ordering
                 partial_transcript = {
                     "timestamp": timestamp,
                     "speaker": participant_identity,
@@ -537,7 +537,7 @@ async def transcribe_and_publish(
                 return
 
         # Use speech end time (when person stopped talking), not current time
-        timestamp = speech_end_time.strftime("%H:%M:%S")
+        timestamp = speech_end_time.strftime("%H:%M:%S.%f")[:-3]  # Include milliseconds for correct ordering
         logger.info(f"[{timestamp}] {participant_identity}: {text}")
 
         # Publish transcript (skip for Hamza - callback handles all publishes)
