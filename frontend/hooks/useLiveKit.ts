@@ -252,6 +252,22 @@ export function useLiveKit({
       return;
     }
 
+    // Signal backend to flush VAD buffer before stopping
+    try {
+      const flushSignal = { type: "flush_audio", timestamp: new Date().toISOString() };
+      await room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify(flushSignal)),
+        { reliable: true }
+      );
+      console.log('Sent flush signal to backend');
+
+      // Small delay for backend to process flush
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (err) {
+      console.error('Error sending flush signal:', err);
+      // Continue with unpublish even if flush fails
+    }
+
     // Unpublish all audio tracks
     const audioTracks = Array.from(room.localParticipant.audioTrackPublications.values());
     for (const publication of audioTracks) {

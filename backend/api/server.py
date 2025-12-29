@@ -516,10 +516,8 @@ async def switch_transcription_model(request: ModelConfigRequest):
 
         logger.info(f"🔄 Model switch command sent to room: {request.room_name} → {request.model}")
 
-        # IMPORTANT: Save to file for agent to read (data messages don't reach agents)
-        from agent.model_config import save_model_config
-        save_model_config(request.room_name, request.model)
-        logger.info(f"💾 Saved model config to file: {request.room_name} → {request.model}")
+        # Note: Model config is NOT persisted to disk - agent uses in-memory state only
+        # Model will reset to default (from .env) on agent restart
 
         # Pre-initialize Hamza WebSocket in API server (optional, for health checks)
         if request.model == "hamza":

@@ -61,6 +61,9 @@ room_transcription_engines = {}  # {"room_name": "mlx_whisper" | "hamza"}
 nudge_context_buffer = {}  # {"room_name": [last 10 transcripts]}
 generated_nudges = {}  # {"room_name": [all generated nudges]}
 
+# Global state: Track VAD streams per participant for manual flushing
+participant_vad_streams = {}  # {"participant_identity": vad_stream}
+
 
 def format_timestamp() -> str:
     """Format current time as HH:MM:SS"""
@@ -80,6 +83,9 @@ async def process_audio_with_vad(
 
     vad_stream = vad.stream()
     transcription_tasks = []
+
+    # Store VAD stream for manual flushing (when mic turned off)
+    participant_vad_streams[participant_identity] = vad_stream
 
     async def push_audio_frames():
         """Push audio frames to VAD with preprocessing"""
@@ -137,13 +143,37 @@ async def process_audio_with_vad(
 
     async def process_vad_events():
         """Process VAD events and transcribe speech segments"""
+        speech_start_time = None
+        auto_flush_timer = None
+
+        async def auto_flush_on_timeout():
+            """Auto-flush VAD buffer after 110 seconds to prevent overflow"""
+            try:
+                await asyncio.sleep(110.0)  # Wait 110 seconds (before 120s limit)
+                logger.info(f"⏰ Auto-flush timer expired for {participant_identity} - injecting silence")
+                _flush_vad_stream_sync(vad_stream, participant_identity)
+            except asyncio.CancelledError:
+                logger.debug(f"Auto-flush timer cancelled for {participant_identity}")
+
         try:
             async for event in vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
                     logger.info(f"🎙️  Speech started: {participant_identity}")
 
+                    # Start auto-flush timer to prevent buffer overflow
+                    speech_start_time = datetime.now()
+                    if auto_flush_timer and not auto_flush_timer.done():
+                        auto_flush_timer.cancel()
+                    auto_flush_timer = asyncio.create_task(auto_flush_on_timeout())
+
                 elif event.type == VADEventType.END_OF_SPEECH:
                     logger.info(f"✋ Speech ended: {participant_identity}, processing {len(event.frames)} frames")
+
+                    # Cancel auto-flush timer (natural END_OF_SPEECH occurred)
+                    speech_start_time = None
+                    if auto_flush_timer and not auto_flush_timer.done():
+                        auto_flush_timer.cancel()
+                        auto_flush_timer = None
 
                     if event.frames:
                         # Capture speech end time NOW (before async transcription)
@@ -165,6 +195,10 @@ async def process_audio_with_vad(
         except Exception as e:
             logger.error(f"Error processing VAD events: {e}", exc_info=True)
         finally:
+            # Cleanup: cancel auto-flush timer
+            if auto_flush_timer and not auto_flush_timer.done():
+                auto_flush_timer.cancel()
+
             await vad_stream.aclose()
             if transcription_tasks:
                 logger.info(f"Waiting for {len(transcription_tasks)} pending transcriptions...")
@@ -175,6 +209,31 @@ async def process_audio_with_vad(
         process_vad_events(),
         return_exceptions=True
     )
+
+    # Cleanup: Remove VAD stream from tracking
+    if participant_identity in participant_vad_streams:
+        del participant_vad_streams[participant_identity]
+        logger.debug(f"Cleaned up VAD stream for {participant_identity}")
+
+
+def _flush_vad_stream_sync(vad_stream, participant_identity: str):
+    """Flush VAD by injecting silence to trigger natural END_OF_SPEECH"""
+    try:
+        # Create 1.5 seconds of silence at 16kHz to trigger VAD's natural silence detection
+        silence_samples = int(16000 * 1.5)
+        silence_audio = np.zeros(silence_samples, dtype=np.int16)
+
+        # Push silence frame to VAD - this triggers natural END_OF_SPEECH event
+        silence_frame = rtc.AudioFrame(
+            data=silence_audio.tobytes(),
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=silence_samples
+        )
+        vad_stream.push_frame(silence_frame)
+        logger.info(f"💨 Injected silence to flush VAD (mic OFF): {participant_identity}")
+    except Exception as e:
+        logger.error(f"Error injecting silence for VAD flush: {e}")
 
 
 def on_data_received(data_packet: rtc.DataPacket, room: Room):
@@ -206,6 +265,16 @@ def on_data_received(data_packet: rtc.DataPacket, room: Room):
                     asyncio.create_task(_init_hamza_client(room))
                 elif new_model == "mlx_whisper":
                     asyncio.create_task(_send_engine_status(room, "mlx_whisper", "connected"))
+
+        elif msg_type == "flush_audio":
+            logger.info(f"🔄 Received flush audio signal from {sender_id} - mic turned OFF")
+            # Manually flush VAD buffer to transcribe accumulated audio
+            if sender_id in participant_vad_streams:
+                vad_stream = participant_vad_streams[sender_id]
+                # Call synchronous flush method directly
+                _flush_vad_stream_sync(vad_stream, sender_id)
+            else:
+                logger.warning(f"No VAD stream found for {sender_id} to flush")
 
     except json.JSONDecodeError as e:
         logger.warning(f"Non-JSON data packet: {e}")
@@ -365,13 +434,8 @@ async def transcribe_and_publish(
         else:
             audio_data = audio_data_source
 
-        # Get current engine (check config file for latest)
-        try:
-            from agent.model_config import load_model_config
-            current_engine = load_model_config(room.name, config.TRANSCRIPTION_ENGINE)
-        except ImportError:
-            current_engine = room_transcription_engines.get(room.name, config.TRANSCRIPTION_ENGINE)
-
+        # Get current engine from in-memory state (or default from .env)
+        current_engine = room_transcription_engines.get(room.name, config.TRANSCRIPTION_ENGINE)
         room_transcription_engines[room.name] = current_engine
         logger.info(f"Using transcription engine: {current_engine}")
 
@@ -550,7 +614,7 @@ def prewarm(proc: JobProcess):
         min_speech_duration=0.25,
         min_silence_duration=1.2,
         prefix_padding_duration=1.0,
-        max_buffered_speech=300.0,  # 5 minutes for long speeches/presentations
+        max_buffered_speech=120.0,  # 2 minutes - auto-segments long speeches, prevents buffer overflow
         sample_rate=16000
     )
     logger.info("✅ VAD loaded")
@@ -641,6 +705,9 @@ async def entrypoint(ctx: JobContext):
         @room.on("participant_connected")
         def on_participant_connected(participant):
             logger.info(f"👤 Participant connected: {participant.identity}")
+            # Send current engine status to newly connected participant
+            engine = config.TRANSCRIPTION_ENGINE
+            asyncio.create_task(_send_engine_status(room, engine, "connected"))
 
         @room.on("participant_disconnected")
         def on_participant_disconnected(participant):
@@ -679,15 +746,10 @@ async def entrypoint(ctx: JobContext):
             await segment_managers[room.name].cleanup()
             del segment_managers[room.name]
 
+        # Cleanup in-memory model state
         if room.name in room_transcription_engines:
             del room_transcription_engines[room.name]
-
-        # Cleanup model config
-        try:
-            from agent.model_config import delete_model_config
-            delete_model_config(room.name)
-        except ImportError:
-            pass
+            logger.debug(f"Removed in-memory model config for {room.name}")
 
         if len(room_transcription_engines) == 0:
             await close_hamza_client()
